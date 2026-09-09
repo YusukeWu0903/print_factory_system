@@ -19,6 +19,7 @@ class WorkOrder(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     item_name = Column(String(200), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
+    client_order_no = Column(String(100), nullable=True)  # 客戶單號/製通單號 (可選)
     
     # 印刷廠紙本專屬欄位
     paper_weight = Column(String(50), nullable=True)     # 紙磅 (例如 "150g", "100lb")

@@ -94,6 +94,7 @@ def list_work_orders(
             client_id=wo.client_id,
             item_name=wo.item_name,
             quantity=wo.quantity,
+            client_order_no=wo.client_order_no,
             total_amount=wo.total_amount,
             status=wo.status.value if hasattr(wo.status, 'value') else str(wo.status),
         )

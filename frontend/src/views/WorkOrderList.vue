@@ -143,6 +143,7 @@ onMounted(() => {
                 
                 <!-- Print specs row -->
                 <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span v-if="wo.client_order_no" class="bg-gray-100 text-gray-700 px-2 py-0.5 rounded font-medium"># {{ wo.client_order_no }}</span>
                   <span v-if="wo.paper_weight" class="bg-gray-50 text-gray-600 px-2 py-0.5 rounded">{{ wo.paper_weight }}</span>
                   <span v-if="wo.paper_type" class="bg-gray-50 text-gray-600 px-2 py-0.5 rounded">{{ wo.paper_type }}</span>
                   <span v-if="wo.cut_type" class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded font-medium">📐 {{ wo.cut_type }}</span>

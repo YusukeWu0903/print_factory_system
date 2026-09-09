@@ -15,6 +15,7 @@ const form = ref({
   client_id: '',
   item_name: '',
   quantity: 1,
+  client_order_no: '',   // 客戶單號/製通單號 (可選)
   
   // 印刷廠紙本專屬欄位
   paper_weight: '',     // 紙磅 (例如 "150g", "50g")
@@ -89,6 +90,7 @@ const handleSubmit = async () => {
       client_id: Number(form.value.client_id),
       item_name: form.value.item_name.trim(),
       quantity: form.value.quantity,
+      client_order_no: form.value.client_order_no || null,
       paper_weight: form.value.paper_weight || null,
       paper_type: form.value.paper_type || null,
       cut_type: form.value.cut_type || null,
@@ -156,6 +158,7 @@ const resetForm = () => {
     client_id: '',
     item_name: '',
     quantity: 1,
+    client_order_no: '',
     paper_weight: '',
     paper_type: '',
     cut_type: '',
@@ -250,6 +253,18 @@ onMounted(() => {
           <p v-if="errors.quantity" class="mt-1 text-sm text-red-600">{{ errors.quantity }}</p>
         </div>
 
+        <!-- 客戶單號 -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">客戶單號 <span class="text-gray-400 text-xs font-normal">(選填)</span></label>
+          <input
+            v-model="form.client_order_no"
+            type="text"
+            class="w-full touch-target border border-gray-300 rounded-lg px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+            placeholder="客戶的製通單號 / 訂單編號"
+            autocomplete="off"
+          />
+        </div>
+
         <!-- 印刷規格區塊 -->
         <fieldset class="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50">
           <legend class="text-sm font-medium text-gray-700">印刷規格</legend>
@@ -339,7 +354,7 @@ onMounted(() => {
 
           <div class="grid grid-cols-3 gap-3">
             <div>
-              <label class="block text-xs text-gray-500 mb-1">紙錢</label>
+              <label class="block text-xs text-gray-500 mb-1">紙費</label>
               <input
                 v-model.number="form.paper_fee"
                 type="number"
@@ -381,7 +396,7 @@ onMounted(() => {
             <span class="text-2xl font-bold text-primary-700">{{ formatCurrency(totalAmount) }}</span>
           </div>
           <p class="text-xs text-primary-600 mt-1">
-            計算方式：(紙錢 + 版費 + 印工) × 數量 = ({{ form.paper_fee }} + {{ form.plate_fee }} + {{ form.wage }}) × {{ form.quantity }}
+            計算方式：(紙費 + 版費 + 印工) × 數量 = ({{ form.paper_fee }} + {{ form.plate_fee }} + {{ form.wage }}) × {{ form.quantity }}
           </p>
         </div>
 
