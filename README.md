@@ -41,7 +41,7 @@ npm run dev
 
 ## 資料庫與升級
 
-預設資料庫固定在 `backend/print_factory.db`，不隨啟動指令所在目錄改變。`DATABASE_URL` 若使用相對 SQLite 路徑，也以 `backend` 為基準。專案最外層若有 `print_factory.db`，不會自動合併或覆蓋它。
+預設資料庫固定在 `backend/print_factory.db`，不隨啟動指令所在目錄改變。`DATABASE_URL` 若使用相對 SQLite 路徑，也以 `backend` 為基準。盤點時發現的專案最外層空資料庫已移至 `backend/backups/outer_root_empty_legacy_20261008.db` 留存；目前只有 `backend/print_factory.db` 是作用中的資料庫。
 
 啟動時會建立缺少的資料表。若舊資料庫缺少 `client_order_no` 欄位，系統會先在 `backend/backups/` 產生 SQLite 備份，再新增欄位；新增登入資料表前也會備份既有資料庫。備份和資料庫檔案均不提交到 Git。首次升級後請確認工單數量與內容正確，再繼續使用。
 
