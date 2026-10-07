@@ -24,6 +24,8 @@ async def disable_api_caching(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+        if hasattr(request.state, "data_mode"):
+            response.headers["X-Data-Mode"] = request.state.data_mode
     return response
 
 # Include routers

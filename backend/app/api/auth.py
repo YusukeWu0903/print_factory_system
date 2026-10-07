@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_auth_db
 from app.core.passwords import verify_password
 from app.models.auth_session import AuthSession
 
@@ -28,7 +28,7 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def require_admin(request: Request, db: Session = Depends(get_db)) -> AuthSession:
+def require_admin(request: Request, db: Session = Depends(get_auth_db)) -> AuthSession:
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="請先登入")
@@ -51,7 +51,7 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> AuthSessio
 
 
 @router.post("/login")
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_auth_db)):
     settings = get_settings()
     if not settings.ADMIN_PASSWORD_HASH:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="管理員密碼尚未設定")
@@ -89,7 +89,7 @@ def me(session: AuthSession = Depends(require_admin)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response, session: AuthSession = Depends(require_admin), db: Session = Depends(get_db)):
+def logout(response: Response, session: AuthSession = Depends(require_admin), db: Session = Depends(get_auth_db)):
     db.delete(session)
     db.commit()
     response.delete_cookie(key=COOKIE_NAME, path="/", secure=True, httponly=True, samesite="strict")

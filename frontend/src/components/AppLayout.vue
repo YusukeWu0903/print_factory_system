@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { logout } from '@/services/auth'
+import { dataMode, switchDataMode } from '@/services/dataMode'
 
 const router = useRouter()
 const route = useRoute()
@@ -121,6 +122,12 @@ onUnmounted(() => {
           {{ item.label }}
         </button>
       </nav>
+      <div :class="dataMode === 'sandbox' ? 'bg-sky-800 text-white' : 'bg-amber-200 text-amber-950'" class="flex items-center justify-between gap-3 px-4 py-2 text-sm font-semibold">
+        <span>{{ dataMode === 'sandbox' ? '測試環境｜資料不會進入正式帳本' : '正式環境｜目前使用正式資料' }}</span>
+        <button type="button" @click="switchDataMode" class="shrink-0 rounded-lg border border-current px-3 py-1.5" :aria-label="dataMode === 'sandbox' ? '切換到正式環境' : '切換到測試環境'">
+          {{ dataMode === 'sandbox' ? '切回正式' : '進入測試' }}
+        </button>
+      </div>
     </header>
 
     <!-- Main Content - with proper top padding to avoid header overlap -->

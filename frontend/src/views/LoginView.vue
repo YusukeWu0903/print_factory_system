@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { login } from '@/services/auth'
+import { dataMode } from '@/services/dataMode'
 
 const password = ref('')
 const error = ref('')
@@ -28,6 +29,7 @@ const handleLogin = async () => {
         <div class="mx-auto w-14 h-14 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center text-2xl" aria-hidden="true">🏭</div>
         <h1 class="text-xl font-bold text-amber-900">印刷廠工單與對帳</h1>
         <p class="text-sm text-gray-600">請以管理員密碼登入</p>
+        <p :class="dataMode === 'sandbox' ? 'bg-sky-100 text-sky-900' : 'bg-amber-100 text-amber-900'" class="rounded-lg px-3 py-2 text-sm font-semibold">{{ dataMode === 'sandbox' ? '測試環境' : '正式環境' }}</p>
       </div>
       <div>
         <label for="admin-password" class="block text-sm font-medium text-gray-700 mb-1.5">管理員密碼</label>

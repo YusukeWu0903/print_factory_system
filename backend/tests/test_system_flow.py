@@ -2,6 +2,9 @@
 
 import os
 import sqlite3
+import subprocess
+import sys
+import textwrap
 from datetime import date
 from pathlib import Path
 
@@ -18,7 +21,7 @@ from sqlalchemy import create_engine  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
-from app.core.database import BACKEND_DIR, Base, get_db, resolve_database_url  # noqa: E402
+from app.core.database import BACKEND_DIR, Base, get_auth_db, get_db, resolve_database_url  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.schema import ensure_schema  # noqa: E402
 from app.main import app  # noqa: E402
@@ -40,10 +43,57 @@ def client():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app, base_url="https://testserver") as test_client:
+    app.dependency_overrides[get_auth_db] = override_get_db
+    with TestClient(app, base_url="https://testserver", headers={"X-Data-Mode": "production"}) as test_client:
         yield test_client
     app.dependency_overrides.clear()
     engine.dispose()
+
+
+def test_sandbox_and_production_stay_separate(tmp_path):
+    production = tmp_path / "production.db"
+    sandbox = tmp_path / "sandbox.db"
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite:///{production.as_posix()}"
+    env["SANDBOX_DATABASE_URL"] = f"sqlite:///{sandbox.as_posix()}"
+    env["ADMIN_PASSWORD_HASH"] = hash_password("correct-horse-battery-staple")
+    script = textwrap.dedent("""
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        with TestClient(app, base_url="https://testserver") as client:
+            login = client.post("/api/auth/login", json={"password": "correct-horse-battery-staple"})
+            assert login.status_code == 200, login.text
+            csrf = login.json()["csrf_token"]
+            prod = {"X-Data-Mode": "production", "X-CSRF-Token": csrf}
+            test = {"X-Data-Mode": "sandbox", "X-CSRF-Token": csrf}
+            assert client.get("/api/clients/", headers=prod).json() == []
+            assert client.get("/api/clients/", headers=test).json() == []
+            response = client.post("/api/clients/", json={"name": "假客戶", "billing_cycle": 15}, headers=test)
+            assert response.status_code == 201, response.text
+            client_id = response.json()["id"]
+            assert client.get("/api/clients/", headers=prod).json() == []
+            assert len(client.get("/api/clients/", headers=test).json()) == 1
+            order = client.post("/api/work-orders/", json={"date": "2026-10-08", "client_id": client_id, "item_name": "假工單", "quantity": 2}, headers=test)
+            assert order.status_code == 201, order.text
+            assert client.get("/api/work-orders/", headers=prod).json() == []
+            assert len(client.get("/api/work-orders/", headers=test).json()) == 1
+            assert client.get("/api/reconciliation/months", params={"client_id": client_id}, headers=test).status_code == 200
+            assert client.get("/api/clients/", headers=test).headers["X-Data-Mode"] == "sandbox"
+            assert client.get("/api/clients/", headers=prod).headers["X-Data-Mode"] == "production"
+            assert client.get("/api/clients/", headers={"X-Data-Mode": "wrong"}).status_code == 400
+            assert client.get("/api/clients/").status_code == 400
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=BACKEND_DIR, env=env, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    with sqlite3.connect(production) as db:
+        assert db.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM work_orders").fetchone()[0] == 0
+    with sqlite3.connect(sandbox) as db:
+        assert db.execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM work_orders").fetchone()[0] == 1
 
 
 def login(client):
