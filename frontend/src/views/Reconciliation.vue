@@ -1,13 +1,10 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted, watch } from 'vue'
 import AppLayout from '@/components/AppLayout.vue'
-import { useWorkOrders, useClients, useStatusHelpers } from '@/composables/useApi'
+import { useClients } from '@/composables/useApi'
+import api from '@/services/api'
 
-const router = useRouter()
 const { clients, fetchClients } = useClients()
-const { updateWorkOrderStatus } = useWorkOrders()
-const { getStatusLabel } = useStatusHelpers()
 
 // 狀態
 const selectedMonth = ref('')
@@ -18,47 +15,54 @@ const reconciliationData = ref(null)
 const availableMonths = ref([])
 const confirming = ref(false)
 const selectedWorkOrders = ref([])
+let monthsRequest = 0
+let summaryRequest = 0
 
 // 可用月份清單
 const loadMonths = async () => {
-  if (!selectedClientId.value) {
+  const requestId = ++monthsRequest
+  const clientId = selectedClientId.value
+  error.value = null
+  if (!clientId) {
     availableMonths.value = []
     selectedMonth.value = ''
     return
   }
   try {
-    const response = await fetch(`/api/reconciliation/months?client_id=${selectedClientId.value}`)
-    if (response.ok) {
-      availableMonths.value = await response.json()
-      if (availableMonths.value.length > 0) {
-        selectedMonth.value = availableMonths.value[0] // 預設選最新月份
-      }
-    }
+    const previousMonth = selectedMonth.value
+    const response = await api.get('/reconciliation/months', { params: { client_id: clientId } })
+    if (requestId !== monthsRequest || clientId !== selectedClientId.value) return
+    availableMonths.value = response.data
+    selectedMonth.value = availableMonths.value.includes(previousMonth)
+      ? previousMonth
+      : (availableMonths.value[0] || '')
+    if (!selectedMonth.value) reconciliationData.value = null
   } catch (err) {
-    console.error('載入月份失敗:', err)
+    if (requestId === monthsRequest) error.value = err.response?.data?.detail || '載入月份失敗'
   }
 }
 
 // 載入對帳彙總
 const loadSummary = async () => {
   if (!selectedMonth.value || !selectedClientId.value) return
+  const requestId = ++summaryRequest
+  const clientId = selectedClientId.value
+  const month = selectedMonth.value
   
   loading.value = true
   error.value = null
   reconciliationData.value = null
   
   try {
-    const response = await fetch(`/api/reconciliation/summary?month=${selectedMonth.value}&client_id=${selectedClientId.value}`)
-    if (response.ok) {
-      reconciliationData.value = await response.json()
-    } else {
-      const err = await response.json()
-      throw new Error(err.detail || '載入對帳資料失敗')
-    }
+    const response = await api.get('/reconciliation/summary', {
+      params: { month, client_id: clientId },
+    })
+    if (requestId !== summaryRequest || clientId !== selectedClientId.value || month !== selectedMonth.value) return
+    reconciliationData.value = response.data
   } catch (err) {
-    error.value = err.message
+    if (requestId === summaryRequest) error.value = err.response?.data?.detail || '載入對帳資料失敗'
   } finally {
-    loading.value = false
+    if (requestId === summaryRequest) loading.value = false
   }
 }
 
@@ -88,33 +92,24 @@ const handleConfirm = async () => {
     return
   }
   
-  if (!confirm(`確定將 ${selectedWorkOrders.value.length} 張工單標記為「已請款」？此操作不可復原。`)) {
+  if (!confirm(`確定將 ${selectedWorkOrders.value.length} 張工單標記為「已請款」？`)) {
     return
   }
   
   confirming.value = true
   try {
-    const response = await fetch('/api/reconciliation/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        month: selectedMonth.value,
-        client_id: selectedClientId.value,
-        work_order_ids: selectedWorkOrders.value
-      })
+    const response = await api.post('/reconciliation/confirm', {
+      month: selectedMonth.value,
+      client_id: Number(selectedClientId.value),
+      work_order_ids: selectedWorkOrders.value,
     })
-    
-    if (response.ok) {
-      const result = await response.json()
-      alert(result.message)
-      selectedWorkOrders.value = []
-      await loadSummary() // 重新載入資料
-    } else {
-      const err = await response.json()
-      throw new Error(err.detail || '結帳失敗')
-    }
+    alert(response.data.message)
+    selectedWorkOrders.value = []
+    const previousMonth = selectedMonth.value
+    await loadMonths()
+    if (selectedMonth.value && selectedMonth.value === previousMonth) await loadSummary()
   } catch (err) {
-    alert(err.message)
+    alert(err.response?.data?.detail || '結帳失敗')
   } finally {
     confirming.value = false
   }
@@ -138,16 +133,12 @@ const formatDate = (dateStr) => {
 
 // 客戶變更時重置月份
 const handleClientChange = () => {
+  summaryRequest += 1
+  loading.value = false
   selectedMonth.value = ''
   reconciliationData.value = null
   selectedWorkOrders.value = []
   loadMonths()
-}
-
-// 月份變更時重新載入
-const handleMonthChange = () => {
-  selectedWorkOrders.value = []
-  loadSummary()
 }
 
 // 初始化
@@ -156,11 +147,11 @@ onMounted(async () => {
 })
 
 // 監聽客戶/月份變更
-import { watch } from 'vue'
 watch(selectedClientId, () => {
   handleClientChange()
 })
 watch(selectedMonth, () => {
+  selectedWorkOrders.value = []
   if (selectedMonth.value) loadSummary()
 })
 </script>
@@ -230,6 +221,7 @@ watch(selectedMonth, () => {
               <div class="bg-white rounded-lg p-3 shadow-sm">
                 <p class="text-xs text-gray-500">月份</p>
                 <p class="font-semibold text-gray-800">{{ reconciliationData.month }}</p>
+                <p class="text-xs text-gray-500 mt-1">{{ reconciliationData.period_start }} 至 {{ reconciliationData.period_end }}</p>
               </div>
               <div class="bg-white rounded-lg p-3 shadow-sm">
                 <p class="text-xs text-gray-500">工單筆數</p>

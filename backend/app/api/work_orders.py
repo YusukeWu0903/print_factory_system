@@ -95,6 +95,13 @@ def list_work_orders(
             item_name=wo.item_name,
             quantity=wo.quantity,
             client_order_no=wo.client_order_no,
+            paper_weight=wo.paper_weight,
+            paper_type=wo.paper_type,
+            cut_type=wo.cut_type,
+            front_side=wo.front_side,
+            back_side=wo.back_side,
+            operator=wo.operator,
+            notes=wo.notes,
             total_amount=wo.total_amount,
             status=wo.status.value if hasattr(wo.status, 'value') else str(wo.status),
         )

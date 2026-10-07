@@ -1,9 +1,16 @@
 <script setup>
+import { onMounted } from 'vue'
 import { RouterView } from 'vue-router'
+import LoginView from '@/views/LoginView.vue'
+import { authState, initializeAuth } from '@/services/auth'
+
+onMounted(initializeAuth)
 </script>
 
 <template>
-  <RouterView />
+  <div v-if="!authState.ready" class="min-h-screen flex items-center justify-center bg-amber-50 text-amber-900">載入中…</div>
+  <LoginView v-else-if="!authState.authenticated" />
+  <RouterView v-else />
 </template>
 
 <style>

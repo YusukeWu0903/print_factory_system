@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { logout } from '@/services/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -42,7 +43,17 @@ const handleFAB = () => {
 const navItems = [
   { path: '/', label: '工單列表', icon: 'list' },
   { path: '/reconciliation', label: '月底對帳', icon: 'calculator' },
+  { path: '/clients', label: '客戶管理', icon: 'users' },
 ]
+
+const handleLogout = async () => {
+  try {
+    await logout()
+    router.push('/')
+  } catch (err) {
+    alert(err.message || '登出失敗，請再試一次')
+  }
+}
 
 // Hide FAB on scroll down, show on scroll up
 let lastScrollY = 0
@@ -89,7 +100,7 @@ onUnmounted(() => {
         </h1>
 
         <!-- Spacer for centering -->
-        <div class="w-10" />
+        <button type="button" @click="handleLogout" class="min-w-10 text-sm text-amber-700 font-medium" aria-label="登出">登出</button>
       </div>
 
       <!-- Navigation Tabs -->

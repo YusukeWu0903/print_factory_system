@@ -1,30 +1,38 @@
 # print_factory_system/backend/app/schemas/work_order.py
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import date
+from decimal import Decimal
 
 
 class WorkOrderBase(BaseModel):
     date: date
     client_id: int
-    item_name: str
-    quantity: int = 1
+    item_name: str = Field(min_length=1, max_length=200)
+    quantity: int = Field(default=1, ge=1)
     client_order_no: Optional[str] = None  # 客戶單號/製通單號 (可選)
     
     # 印刷廠紙本專屬欄位
     paper_weight: Optional[str] = None     # 紙磅 (例如 "150g", "100lb")
     paper_type: Optional[str] = None       # 紙別 (例如 "雙銅", "道林")
     cut_type: Optional[str] = None         # 裁別 (例如 "菊全開", "四開", "八開")
-    client_order_no: Optional[str] = None # 客戶單號/製通單號
-    front_side: Optional[int] = None       # 正面色數 (數字，例如 4, 1, 0)
-    back_side: Optional[int] = None        # 反面色數 (數字，例如 1, 0)
-    operator: Optional[int] = None         # 人員數 (人數，數字)
+    front_side: Optional[int] = Field(default=None, ge=0)  # 正面色數
+    back_side: Optional[int] = Field(default=None, ge=0)   # 反面色數
+    operator: Optional[int] = Field(default=None, ge=0)    # 人員數
     notes: Optional[str] = None            # 備註 (其他特殊要求/後加工)
 
     # 費用結構
-    paper_fee: float = 0.0
-    plate_fee: float = 0.0
-    wage: float = 0.0
+    paper_fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=10, decimal_places=2)
+    plate_fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=10, decimal_places=2)
+    wage: Decimal = Field(default=Decimal("0"), ge=0, max_digits=10, decimal_places=2)
+
+    @field_validator("item_name")
+    @classmethod
+    def strip_item_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("品名不可空白")
+        return value
 
 
 class WorkOrderCreate(WorkOrderBase):
@@ -34,20 +42,33 @@ class WorkOrderCreate(WorkOrderBase):
 class WorkOrderUpdate(BaseModel):
     date: Optional[date] = None
     client_id: Optional[int] = None
-    item_name: Optional[str] = None
-    quantity: Optional[int] = None
-    client_order_no: Optional[str] = None
+    item_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    quantity: Optional[int] = Field(default=None, ge=1)
     paper_weight: Optional[str] = None
     paper_type: Optional[str] = None
     cut_type: Optional[str] = None
     client_order_no: Optional[str] = None
-    front_side: Optional[int] = None
-    back_side: Optional[int] = None
-    operator: Optional[int] = None
+    front_side: Optional[int] = Field(default=None, ge=0)
+    back_side: Optional[int] = Field(default=None, ge=0)
+    operator: Optional[int] = Field(default=None, ge=0)
     notes: Optional[str] = None
-    paper_fee: Optional[float] = None
-    plate_fee: Optional[float] = None
-    wage: Optional[float] = None
+    paper_fee: Optional[Decimal] = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    plate_fee: Optional[Decimal] = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    wage: Optional[Decimal] = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+
+    @field_validator("date", "client_id", "quantity", "paper_fee", "plate_fee", "wage")
+    @classmethod
+    def reject_null_required_fields(cls, value):
+        if value is None:
+            raise ValueError("此欄位不可為空")
+        return value
+
+    @field_validator("item_name")
+    @classmethod
+    def strip_item_name(cls, value: Optional[str]) -> str:
+        if value is None or not value.strip():
+            raise ValueError("品名不可空白")
+        return value.strip()
 
 
 class WorkOrderStatusUpdate(BaseModel):
@@ -68,7 +89,6 @@ class WorkOrderResponse(WorkOrderBase):
             "client_id": obj.client_id,
             "item_name": obj.item_name,
             "quantity": obj.quantity,
-            "client_order_no": obj.client_order_no,
             "paper_weight": obj.paper_weight,
             "paper_type": obj.paper_type,
             "cut_type": obj.cut_type,
@@ -95,5 +115,12 @@ class WorkOrderListResponse(BaseModel):
     item_name: str
     quantity: int
     client_order_no: Optional[str] = None
+    paper_weight: Optional[str] = None
+    paper_type: Optional[str] = None
+    cut_type: Optional[str] = None
+    front_side: Optional[int] = None
+    back_side: Optional[int] = None
+    operator: Optional[int] = None
+    notes: Optional[str] = None
     total_amount: float
     status: str

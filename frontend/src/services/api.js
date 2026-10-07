@@ -1,8 +1,10 @@
 import axios from 'axios'
+import { authState, markLoggedOut } from './auth'
 
 const api = axios.create({
   baseURL: '/api',  // 使用相對路徑，透過 Vite Proxy 轉發
   timeout: 10000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
     'ngrok-skip-browser-warning': 'true',  // 防止 Ngrok 攔截背景 API 請求
@@ -12,6 +14,9 @@ const api = axios.create({
 // Request interceptor for loading state
 api.interceptors.request.use(
   (config) => {
+    if (['post', 'put', 'patch', 'delete'].includes(config.method?.toLowerCase()) && authState.csrfToken) {
+      config.headers['X-CSRF-Token'] = authState.csrfToken
+    }
     return config
   },
   (error) => Promise.reject(error)
@@ -21,6 +26,7 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response?.status === 401) markLoggedOut()
     console.error('API Error:', error.response?.data || error.message)
     return Promise.reject(error)
   }

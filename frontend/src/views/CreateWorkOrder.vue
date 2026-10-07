@@ -10,8 +10,15 @@ const route = useRoute()
 const { createWorkOrder, loading: createLoading } = useWorkOrders()
 const { clients, fetchClients, loading: clientsLoading, createClient } = useClients()
 
+const todayLocal = () => {
+  const today = new Date()
+  const month = String(today.getMonth() + 1).padStart(2, '0')
+  const day = String(today.getDate()).padStart(2, '0')
+  return `${today.getFullYear()}-${month}-${day}`
+}
+
 const form = ref({
-  date: new Date().toISOString().split('T')[0],
+  date: todayLocal(),
   client_id: '',
   item_name: '',
   quantity: 1,
@@ -74,8 +81,8 @@ const validateForm = () => {
 const validateNewClient = () => {
   newClientErrors.value = {}
   if (!newClientForm.value.name.trim()) newClientErrors.value.name = '請輸入客戶名稱'
-  if (newClientForm.value.tax_id && newClientForm.value.tax_id.length !== 8) {
-    newClientErrors.value.tax_id = '統編需為 8 碼'
+  if (newClientForm.value.tax_id && !/^[0-9]{8}$/.test(newClientForm.value.tax_id)) {
+    newClientErrors.value.tax_id = '統編需為 8 碼數字'
   }
   return Object.keys(newClientErrors.value).length === 0
 }
@@ -154,7 +161,7 @@ const handleCreateClient = async () => {
 
 const resetForm = () => {
   form.value = {
-    date: new Date().toISOString().split('T')[0],
+    date: todayLocal(),
     client_id: '',
     item_name: '',
     quantity: 1,

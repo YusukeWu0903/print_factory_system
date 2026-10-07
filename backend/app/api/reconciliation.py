@@ -1,14 +1,15 @@
 # print_factory_system/backend/app/api/reconciliation.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, extract
 from typing import List, Optional
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
+from calendar import monthrange
+import re
 from app.core.database import get_db
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.models.client import Client
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List as TypingList
 
 router = APIRouter(prefix="", tags=["Reconciliation"])
@@ -31,14 +32,15 @@ class ReconciliationWorkOrder(BaseModel):
     operator: Optional[int] = None
     notes: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ReconciliationSummary(BaseModel):
     client_id: int
     client_name: str
     month: str  # "2026-08"
+    period_start: date
+    period_end: date
     total_amount: Decimal
     work_order_count: int
     work_orders: List[ReconciliationWorkOrder]
@@ -62,8 +64,10 @@ class ReconciliationConfirmResponse(BaseModel):
 def parse_month(month_str: str) -> tuple:
     """解析 '2026-08' 格式，回傳 (year, month)"""
     try:
+        if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", month_str):
+            raise ValueError
         year, month = map(int, month_str.split('-'))
-        if not (1 <= month <= 12):
+        if year < 1:
             raise ValueError
         return year, month
     except Exception:
@@ -73,13 +77,28 @@ def parse_month(month_str: str) -> tuple:
         )
 
 
-def get_month_date_range(year: int, month: int) -> tuple:
-    """取得該月份的起始/結束日期"""
-    from calendar import monthrange
-    start_date = date(year, month, 1)
-    last_day = monthrange(year, month)[1]
-    end_date = date(year, month, last_day)
-    return start_date, end_date
+def get_billing_period(year: int, month: int, billing_cycle: int) -> tuple[date, date]:
+    """A named month ends on that client's cutoff day (or the month's last day)."""
+    end_date = date(year, month, min(billing_cycle, monthrange(year, month)[1]))
+    previous_year, previous_month = (year - 1, 12) if month == 1 else (year, month - 1)
+    previous_cutoff = date(
+        previous_year,
+        previous_month,
+        min(billing_cycle, monthrange(previous_year, previous_month)[1]),
+    )
+    return previous_cutoff + timedelta(days=1), end_date
+
+
+def billing_month_for_date(order_date: date, billing_cycle: int) -> str:
+    cutoff = min(billing_cycle, monthrange(order_date.year, order_date.month)[1])
+    if order_date.day <= cutoff:
+        return f"{order_date.year}-{order_date.month:02d}"
+    year, month = (
+        (order_date.year + 1, 1)
+        if order_date.month == 12
+        else (order_date.year, order_date.month + 1)
+    )
+    return f"{year}-{month:02d}"
 
 
 # ===== API Endpoints =====
@@ -101,7 +120,7 @@ def get_reconciliation_summary(
         )
     
     year, month_num = parse_month(month)
-    start_date, end_date = get_month_date_range(year, month_num)
+    start_date, end_date = get_billing_period(year, month_num, client.billing_cycle)
     
     # 查詢該月份、該客戶、狀態為「已完成_待請款」的工單
     query = db.query(WorkOrder).options(joinedload(WorkOrder.client)).filter(
@@ -140,6 +159,8 @@ def get_reconciliation_summary(
         client_id=client.id,
         client_name=client.name,
         month=f"{year}-{month_num:02d}",
+        period_start=start_date,
+        period_end=end_date,
         total_amount=total_amount,
         work_order_count=len(work_orders),
         work_orders=wo_list,
@@ -159,8 +180,12 @@ def confirm_reconciliation(
             detail="請選擇至少一張工單進行結帳"
         )
     
+    client = db.query(Client).filter(Client.id == request.client_id).first()
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客戶不存在")
+
     year, month_num = parse_month(request.month)
-    start_date, end_date = get_month_date_range(year, month_num)
+    start_date, end_date = get_billing_period(year, month_num, client.billing_cycle)
     
     # 查詢目標工單
     query = db.query(WorkOrder).filter(
@@ -176,7 +201,7 @@ def confirm_reconciliation(
     if not work_orders:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="找到符合條件的待請款工單"
+            detail="找不到符合條件的待請款工單"
         )
     
     # 檢查是否有不符合條件的工單 ID
@@ -230,13 +255,13 @@ def get_available_months(
             detail="客戶不存在"
         )
     
-    # 查詢有「已完成_待請款」工單的月份
-    months = db.query(
-        extract('year', WorkOrder.date).label('year'),
-        extract('month', WorkOrder.date).label('month')
-    ).filter(
+    # A late-month order belongs to the following billing period.
+    order_dates = db.query(WorkOrder.date).filter(
         WorkOrder.client_id == client_id,
         WorkOrder.status == WorkOrderStatus.COMPLETED_PENDING_BILLING,
-    ).group_by('year', 'month').order_by('year', 'month').all()
+    ).all()
     
-    return [f"{int(m.year)}-{int(m.month):02d}" for m in months]
+    return sorted(
+        {billing_month_for_date(row.date, client.billing_cycle) for row in order_dates},
+        reverse=True,
+    )

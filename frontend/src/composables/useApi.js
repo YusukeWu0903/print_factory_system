@@ -10,8 +10,14 @@ export function useClients() {
     loading.value = true
     error.value = null
     try {
-      const response = await api.get('/clients/')
-      clients.value = response.data
+      const allClients = []
+      const limit = 100
+      while (true) {
+        const response = await api.get('/clients/', { params: { skip: allClients.length, limit } })
+        allClients.push(...response.data)
+        if (response.data.length < limit) break
+      }
+      clients.value = allClients
     } catch (err) {
       error.value = err.response?.data?.detail || '載入客戶失敗'
     } finally {
@@ -49,8 +55,14 @@ export function useWorkOrders() {
     loading.value = true
     error.value = null
     try {
-      const response = await api.get('/work-orders/', { params })
-      workOrders.value = response.data
+      const allWorkOrders = []
+      const limit = 100
+      while (true) {
+        const response = await api.get('/work-orders/', { params: { ...params, skip: allWorkOrders.length, limit } })
+        allWorkOrders.push(...response.data)
+        if (response.data.length < limit) break
+      }
+      workOrders.value = allWorkOrders
     } catch (err) {
       error.value = err.response?.data?.detail || '載入工單失敗'
     } finally {
