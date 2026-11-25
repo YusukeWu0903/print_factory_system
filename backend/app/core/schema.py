@@ -37,7 +37,10 @@ def ensure_schema(engine) -> None:
         column["name"] for column in inspector.get_columns("auth_sessions")
     }
 
-    if (needs_order_number or needs_session_table or needs_session_credential) and engine.url.get_backend_name() == "sqlite":
+    columns = {c["name"] for c in inspector.get_columns("work_orders")} if "work_orders" in tables else set()
+    additions = {"revision": "INTEGER NOT NULL DEFAULT 1", "updated_at": "VARCHAR(40)", "audit_key": "VARCHAR(32)"}
+    missing = set(additions) - columns if columns else set()
+    if (missing or (bool(tables) and "statements" not in tables) or needs_order_number or needs_session_table or needs_session_credential) and engine.url.get_backend_name() == "sqlite":
         database_name = engine.url.database
         if database_name and database_name != ":memory:":
             database_path = Path(database_name)
@@ -61,4 +64,12 @@ def ensure_schema(engine) -> None:
                 "ALTER TABLE auth_sessions ADD COLUMN credential_hash VARCHAR(64) NOT NULL DEFAULT ''"
             )
 
+    with engine.begin() as connection:
+        for name in sorted(missing):
+            connection.exec_driver_sql(f"ALTER TABLE work_orders ADD COLUMN {name} {additions[name]}")
     Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as connection:
+            for operation in ("UPDATE", "DELETE"):
+                connection.exec_driver_sql(f"CREATE TRIGGER IF NOT EXISTS immutable_history_{operation} "
+                    f"BEFORE {operation} ON order_history BEGIN SELECT RAISE(ABORT, 'immutable order history'); END")

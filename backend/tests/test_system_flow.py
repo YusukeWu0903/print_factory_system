@@ -283,3 +283,42 @@ def test_database_path_and_legacy_migration(tmp_path):
         old_columns = {row[1] for row in backup.execute("PRAGMA table_info(work_orders)")}
         assert "client_order_no" not in old_columns
     engine.dispose()
+
+def test_merge_keeps_batch_snapshots_and_rejects_reuse(client):
+    headers = login(client)
+    cid = create_client(client, headers)
+    base = "/api/reconciliation"
+    def issue(day):
+        oid = create_pending_order(client, headers, cid, day)
+        r = client.post(base + "/confirm", headers=headers,
+                        json={"client_id": cid, "month": "2026-10", "work_order_ids": [oid]})
+        assert r.status_code == 200, r.text
+        return r.json()["statement_id"]
+    a, b = issue("2026-10-01"), issue("2026-10-02")
+    originals = client.get(base + "/statements").json()
+    merged = client.post(base + "/statements/merge", headers=headers, json={"ids": [a,b]})
+    assert merged.status_code == 200, merged.text
+    report = merged.json()
+    assert report["total"] == "240.00" and report["sources"] == [a,b]
+    assert len(report["lines"]) == 2
+    assert client.post(base + "/statements/merge", headers=headers, json={"ids":[a,b]}).status_code == 409
+    after = {r["id"]:r for r in client.get(base + "/statements").json()}
+    for old in originals:
+        assert after[old["id"]]["lines"] == old["lines"]
+        assert after[old["id"]]["merged_into"] == report["id"]
+
+def test_order_edit_history_and_stale_revision(client):
+    h = login(client)
+    cid = create_client(client, h)
+    path = "/api/work-orders/"
+    created = client.post(path, headers=h, json={"date":"2026-11-25","item_name":"原稿","quantity":10,"client_id":cid}).json()
+    url = path + str(created["id"])
+    payload = {"expected_revision":created["revision"], "quantity":12}
+    result = client.patch(url, headers=h, json=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()["updated_at"] and result.json()["revision"] > created["revision"]
+    assert client.patch(url, headers=h, json={**payload,"quantity":13}).status_code == 409
+    assert client.get(url).json()["quantity"] == 12
+    history = client.get(url+"/history").json()
+    assert [e["action"] for e in history] == ["修改","建立"]
+    assert history[0]["changes"]["quantity"] == ["10","12"]

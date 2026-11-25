@@ -9,6 +9,8 @@ import re
 from app.core.database import get_db
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.models.client import Client
+from app.models.statement import Statement, IssuedOrder
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, ConfigDict
 from typing import List as TypingList
 
@@ -55,6 +57,7 @@ class ReconciliationConfirmRequest(BaseModel):
 class ReconciliationConfirmResponse(BaseModel):
     success: bool
     message: str
+    statement_id: int
     updated_count: int
     total_amount: Decimal
 
@@ -214,31 +217,65 @@ def confirm_reconciliation(
             detail=f"以下工單不符合結帳條件（非待請款、非該客戶、非該月份）：{sorted(missing_ids)}"
         )
     
-    # 批次更新狀態
-    updated_count = 0
-    total_amount = Decimal('0')
-    
+    lines = [{"order_id": w.id, "date": w.date.isoformat(), "item": w.item_name,
+              "reference": w.client_order_no, "quantity": w.quantity, "amount": str(w.total_amount)}
+             for w in sorted(work_orders, key=lambda w: (w.date, w.id))]
+    total = sum(w.total_amount for w in work_orders)
+    statement = Statement(client_id=client.id, client_name=client.name, month=request.month,
+                          period_start=start_date, period_end=end_date, lines=lines, sources=[], total=total)
     try:
-        for wo in work_orders:
-            wo.status = WorkOrderStatus.BILLED
-            total_amount += wo.total_amount
-            updated_count += 1
-        
+        db.add(statement)
+        db.flush()
+        for order in work_orders:
+            db.add(IssuedOrder(order_id=order.id, statement_id=statement.id))
+            order.status = WorkOrderStatus.BILLED
         db.commit()
-        
-        return ReconciliationConfirmResponse(
-            success=True,
-            message=f"成功結帳 {updated_count} 張工單",
-            updated_count=updated_count,
-            total_amount=total_amount,
-        )
-        
-    except Exception as e:
+    except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"結帳失敗：{str(e)}"
-        )
+        raise HTTPException(409, "工單已出單，請重新整理")
+    return ReconciliationConfirmResponse(success=True, statement_id=statement.id,
+        message=f"已建立結算單 #{statement.id}", updated_count=len(lines), total_amount=total)
+
+
+def statement_data(row):
+    fields = ("id", "issued", "client_id", "client_name", "month", "period_start", "period_end",
+              "sources", "merged_into", "lines")
+    return {**{key: getattr(row, key) for key in fields}, "total": str(row.total)}
+
+
+@router.get("/statements")
+def statements(db: Session = Depends(get_db)):
+    return [statement_data(row) for row in db.query(Statement).order_by(Statement.id.desc())]
+
+
+class MergeRequest(BaseModel):
+    ids: list[int]
+
+
+@router.post("/statements/merge")
+def merge_statements(request: MergeRequest, db: Session = Depends(get_db)):
+    ids = set(request.ids)
+    if len(ids) < 2 or len(ids) != len(request.ids):
+        raise HTTPException(400, "請勾選至少兩張不同的結算單")
+    rows = db.query(Statement).filter(Statement.id.in_(ids)).order_by(Statement.id).all()
+    if len(rows) != len(ids) or any(row.merged_into for row in rows):
+        raise HTTPException(409, "選取的單據不存在或已併單")
+    first = rows[0]
+    if len({(r.client_id, r.month, r.period_start, r.period_end) for r in rows}) != 1:
+        raise HTTPException(400, "只能合併同客戶、同帳期的結算單")
+    merged = Statement(client_id=first.client_id, client_name=first.client_name, month=first.month,
+                       period_start=first.period_start, period_end=first.period_end,
+                       sources=[r.id for r in rows], lines=[line for r in rows for line in r.lines],
+                       total=sum(r.total for r in rows))
+    db.add(merged)
+    db.flush()
+    claimed = db.query(Statement).filter(Statement.id.in_(ids), Statement.merged_into.is_(None)).update(
+        {Statement.merged_into: merged.id}, synchronize_session=False)
+    if claimed != len(ids):
+        db.rollback()
+        raise HTTPException(409, "單據已被合併，請重新整理")
+    db.commit()
+    return statement_data(merged)
 
 
 @router.get("/months", response_model=List[str])

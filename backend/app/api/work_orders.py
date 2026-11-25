@@ -88,7 +88,7 @@ def list_work_orders(
 
     return [
         WorkOrderListResponse(
-            id=wo.id,
+            id=wo.id, revision=wo.revision, updated_at=wo.updated_at,
             date=wo.date,
             client_name=wo.client.name if wo.client else "未知客戶",
             client_id=wo.client_id,
@@ -126,6 +126,16 @@ def get_work_order(work_order_id: int, db: Session = Depends(get_db)):
     return WorkOrderResponse.from_orm_with_client(work_order)
 
 
+@router.get("/{work_order_id}/history")
+def order_history(work_order_id: int, db: Session = Depends(get_db)):
+    from app.models.work_order import OrderHistory
+    order = db.get(WorkOrder, work_order_id)
+    if not order:
+        raise HTTPException(404, "工單不存在")
+    return [{"id": r.id, "timestamp": r.timestamp, "actor": r.actor, "action": r.action, "changes": r.changes}
+            for r in db.query(OrderHistory).filter_by(audit_key=order.audit_key).order_by(OrderHistory.id.desc())]
+
+
 @router.patch("/{work_order_id}", response_model=WorkOrderResponse)
 def update_work_order(
     work_order_id: int, work_order_update: WorkOrderUpdate, db: Session = Depends(get_db)
@@ -139,6 +149,8 @@ def update_work_order(
 
     update_data = work_order_update.model_dump(exclude_unset=True)
 
+    if update_data.pop("expected_revision") != work_order.revision:
+        raise HTTPException(409, "工單已有更新。請保留輸入內容，重新開啟工單比對後再儲存。")
     # Verify client exists if client_id is being updated
     if "client_id" in update_data:
         client = db.query(Client).filter(Client.id == update_data["client_id"]).first()
@@ -201,6 +213,15 @@ def update_work_order_status(
             detail=f"不允許的狀態變更：{current_status.value} -> {new_status.value}",
         )
 
+    from app.api.reconciliation import billing_month_for_date, confirm_reconciliation, ReconciliationConfirmRequest
+    from app.models.statement import IssuedOrder
+    if new_status == WorkOrderStatus.BILLED:
+        month = billing_month_for_date(work_order.date, work_order.client.billing_cycle)
+        confirm_reconciliation(ReconciliationConfirmRequest(client_id=work_order.client_id, month=month,
+                                                          work_order_ids=[work_order.id]), db)
+        return WorkOrderResponse.from_orm_with_client(work_order)
+    if current_status == WorkOrderStatus.BILLED and db.get(IssuedOrder, work_order.id):
+        raise HTTPException(409, "此工單已有結算單，無法退回待請款")
     work_order.status = new_status
     db.commit()
     db.refresh(work_order)

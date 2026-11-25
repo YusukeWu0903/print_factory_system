@@ -40,6 +40,7 @@ class WorkOrderCreate(WorkOrderBase):
 
 
 class WorkOrderUpdate(BaseModel):
+    expected_revision: int = Field(ge=1)
     date: Optional[date] = None
     client_id: Optional[int] = None
     item_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
@@ -76,6 +77,8 @@ class WorkOrderStatusUpdate(BaseModel):
 
 
 class WorkOrderResponse(WorkOrderBase):
+    revision: int
+    updated_at: Optional[str] = None
     id: int
     total_amount: float
     status: str
@@ -85,6 +88,7 @@ class WorkOrderResponse(WorkOrderBase):
     def from_orm_with_client(cls, obj):
         data = {
             "id": obj.id,
+            "revision": obj.revision, "updated_at": obj.updated_at,
             "date": obj.date,
             "client_id": obj.client_id,
             "item_name": obj.item_name,
@@ -108,6 +112,8 @@ class WorkOrderResponse(WorkOrderBase):
 
 
 class WorkOrderListResponse(BaseModel):
+    revision: int
+    updated_at: Optional[str] = None
     id: int
     date: date
     client_name: str

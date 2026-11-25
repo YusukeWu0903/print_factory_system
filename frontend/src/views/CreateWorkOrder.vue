@@ -1,13 +1,16 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import api from '@/services/api'
+import PhotoImport from '@/components/PhotoImport.vue'
+import { authState } from '@/services/auth'
 import AppLayout from '@/components/AppLayout.vue'
 import { useWorkOrders, useClients } from '@/composables/useApi'
 
 const router = useRouter()
 const route = useRoute()
 
-const { createWorkOrder, loading: createLoading } = useWorkOrders()
+const { createWorkOrder, updateWorkOrder } = useWorkOrders()
 const { clients, fetchClients, loading: clientsLoading, createClient } = useClients()
 
 const todayLocal = () => {
@@ -39,6 +42,12 @@ const form = ref({
   wage: 0,
 })
 
+const editId = route.query.edit
+const editing = editId !== undefined
+const ready = ref(!editing)
+const loadError = ref('')
+const original = {}
+const listLocation = {path: '/', query: { samples: route.query.samples }}
 const errors = ref({})
 const submitting = ref(false)
 
@@ -88,11 +97,11 @@ const validateNewClient = () => {
 }
 
 const handleSubmit = async () => {
-  if (!validateForm()) return
+  if (!ready.value || submitting.value || !validateForm()) return
 
   submitting.value = true
   try {
-    await createWorkOrder({
+    const payload = {
       date: form.value.date,
       client_id: Number(form.value.client_id),
       item_name: form.value.item_name.trim(),
@@ -108,14 +117,20 @@ const handleSubmit = async () => {
       paper_fee: form.value.paper_fee,
       plate_fee: form.value.plate_fee,
       wage: form.value.wage,
-    })
-    router.push('/')
+    }
+    if (editing) {
+      const changes = Object.fromEntries(Object.entries(payload).filter(([key, value]) =>
+        String(value ?? '') !== String(original[key] ?? '')
+      ))
+      if (Object.keys(changes).length) await updateWorkOrder(editId, { ...changes, expected_revision: original.revision })
+    } else await createWorkOrder(payload)
+    router.push(listLocation)
   } catch (err) {
     const detail = err.response?.data?.detail
     if (detail) {
       alert(detail)
     } else {
-      alert('建立工單失敗，請稍後再試')
+      alert('儲存工單失敗，請稍後再試')
     }
   } finally {
     submitting.value = false
@@ -180,16 +195,28 @@ const resetForm = () => {
   errors.value = {}
 }
 
-onMounted(() => {
+onMounted(async () => {
   fetchClients()
+  if (!editing) return
+  try {
+    if (!/^\d+$/.test(editId)) throw new Error()
+    const {data} = await api.get('/work-orders/' + editId)
+    for (const key of Object.keys(form.value)) {
+      const value = data[key] ?? form.value[key]
+      form.value[key] = ['paper_fee','plate_fee','wage'].includes(key) ? Number(value) : value
+    }
+    Object.assign(original, form.value, { revision: data.revision })
+    ready.value = true
+  } catch { loadError.value = '無法讀取這張工單，請返回列表再試。' }
 })
 </script>
 
 <template>
-  <AppLayout title="新增工單" :showBack="true" :fabAction="null">
+  <AppLayout :title="editing ? '編輯工單 #' + editId : '新增工單'" :showBack="true" :fabAction="null">
     <template #default>
-      <form @submit.prevent="handleSubmit" class="p-3 space-y-4" novalidate>
-        <!-- Date Picker -->
+      <p v-if="loadError" role="alert">{{ loadError }}</p><p v-else-if="!ready">載入工單中…</p>
+      <form v-else @submit.prevent="handleSubmit" class="bg-white border rounded-xl p-4 sm:p-6 max-w-3xl mx-auto space-y-4" novalidate>
+        <fieldset class="space-y-4"><legend class="font-semibold">客戶與品項</legend><PhotoImport v-if="authState.publicSandbox" @apply="Object.assign(form, $event)" />
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1.5">工單日期</label>
           <input
@@ -209,7 +236,7 @@ onMounted(() => {
             <button
               type="button"
               @click="openClientModal"
-              class="text-sm text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1 touch-target px-2 py-1"
+              class="text-sm text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 touch-target px-2 py-1"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -273,6 +300,7 @@ onMounted(() => {
         </div>
 
         <!-- 印刷規格區塊 -->
+        </fieldset>
         <fieldset class="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50">
           <legend class="text-sm font-medium text-gray-700">印刷規格</legend>
 
@@ -397,12 +425,12 @@ onMounted(() => {
         </fieldset>
 
         <!-- Total Amount Preview -->
-        <div class="bg-primary-50 border border-primary-200 rounded-xl p-4">
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
           <div class="flex items-center justify-between">
-            <span class="text-sm font-medium text-primary-800">預估總金額</span>
-            <span class="text-2xl font-bold text-primary-700">{{ formatCurrency(totalAmount) }}</span>
+            <span class="text-sm font-medium text-blue-800">預估總金額</span>
+            <span class="text-2xl font-bold text-blue-700">{{ formatCurrency(totalAmount) }}</span>
           </div>
-          <p class="text-xs text-primary-600 mt-1">
+          <p class="text-xs text-blue-600 mt-1">
             計算方式：(紙費 + 版費 + 印工) × 數量 = ({{ form.paper_fee }} + {{ form.plate_fee }} + {{ form.wage }}) × {{ form.quantity }}
           </p>
         </div>
@@ -411,23 +439,23 @@ onMounted(() => {
         <button
           type="submit"
           :disabled="submitting"
-          class="w-full touch-target bg-primary-600 text-white font-semibold rounded-xl py-3.5 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          class="w-full touch-target bg-blue-700 text-white font-semibold rounded-xl py-3.5 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
           <svg v-if="submitting" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
-          <span>{{ submitting ? '建立中...' : '建立工單' }}</span>
+          <span>{{ submitting ? '儲存中…' : editing ? '儲存修改' : '建立工單' }}</span>
         </button>
 
         <!-- Reset Button -->
         <button
           type="button"
-          @click="resetForm"
+          @click="editing ? router.push(listLocation) : resetForm()"
           :disabled="submitting"
           class="w-full touch-target bg-white border border-gray-300 text-gray-700 font-medium rounded-xl py-3.5 active:bg-gray-50 transition-colors disabled:opacity-50"
         >
-          重置表單
+          {{ editing ? '取消編輯' : '重置表單' }}
         </button>
       </form>
 
@@ -503,7 +531,7 @@ onMounted(() => {
               <button
                 @click="handleCreateClient"
                 :disabled="creatingClient"
-                class="flex-1 touch-target bg-primary-600 text-white font-semibold rounded-xl py-3 active:scale-[0.98] transition-transform disabled:opacity-50 flex items-center justify-center gap-2"
+                class="flex-1 touch-target bg-blue-700 text-white font-semibold rounded-xl py-3 active:scale-[0.98] transition-transform disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 <svg v-if="creatingClient" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />

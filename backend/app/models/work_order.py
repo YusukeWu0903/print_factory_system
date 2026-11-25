@@ -3,6 +3,10 @@ from sqlalchemy import Column, Integer, String, Date, ForeignKey, Numeric, Text,
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 import enum
+from datetime import datetime, timezone
+from uuid import uuid4
+from sqlalchemy import JSON, event, inspect
+from sqlalchemy.orm import object_session
 
 
 class WorkOrderStatus(str, enum.Enum):
@@ -15,6 +19,10 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    revision = Column(Integer, nullable=False, default=1)
+    __mapper_args__ = {"version_id_col": revision}
+    audit_key = Column(String(32))
+    updated_at = Column(String(40))
     date = Column(Date, nullable=False, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
     item_name = Column(String(200), nullable=False)
@@ -48,3 +56,58 @@ class WorkOrder(Base):
 
     def __repr__(self):
         return f"<WorkOrder(id={self.id}, date='{self.date}', client_id={self.client_id}, item='{self.item_name}', total={self.total_amount}, status='{self.status}')>"
+
+class OrderHistory(Base):
+    __tablename__ = "order_history"
+    id = Column(Integer, primary_key=True)
+    audit_key = Column(String(32), nullable=False, index=True)
+    order_id = Column(Integer, nullable=False)
+    timestamp = Column(String(40), nullable=False)
+    actor = Column(String, nullable=False)
+    action = Column(String, nullable=False)
+    changes = Column(JSON, nullable=False)
+
+
+def printable(value):
+    return value.value if isinstance(value, enum.Enum) else None if value is None else str(value)
+
+
+def record(connection, order, action, changes):
+    connection.execute(OrderHistory.__table__.insert().values(
+        audit_key=order.audit_key or uuid4().hex, order_id=order.id,
+        timestamp=order.updated_at if action != "刪除" else datetime.now(timezone.utc).isoformat(),
+        actor=object_session(order).info.get("actor", "管理員"), action=action, changes=changes))
+
+
+@event.listens_for(WorkOrder, "before_insert")
+def stamp_creation(mapper, connection, order):
+    order.audit_key = uuid4().hex
+    order.updated_at = datetime.now(timezone.utc).isoformat()
+
+
+@event.listens_for(WorkOrder, "after_insert")
+def record_creation(mapper, connection, order):
+    record(connection, order, "建立", {})
+
+
+@event.listens_for(WorkOrder, "before_update")
+def record_update(mapper, connection, order):
+    changes = {}
+    for column in mapper.columns:
+        key = column.key
+        if key in {"id", "revision", "updated_at", "audit_key"}:
+            continue
+        history = inspect(order).attrs[key].history
+        if history.has_changes():
+            before = history.deleted[0] if history.deleted else None
+            changes[key] = [printable(before), printable(getattr(order, key))]
+    if changes:
+        order.audit_key = order.audit_key or uuid4().hex
+        order.updated_at = datetime.now(timezone.utc).isoformat()
+        record(connection, order, "修改", changes)
+
+
+@event.listens_for(WorkOrder, "after_delete")
+def record_deletion(mapper, connection, order):
+    record(connection, order, "刪除", {key: [printable(getattr(order,key)), None]
+           for key in ("item_name","quantity","client_id","total_amount")})

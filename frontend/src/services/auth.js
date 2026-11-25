@@ -1,7 +1,8 @@
 import { reactive } from 'vue'
+import { dataMode } from './dataMode'
 
 export const authState = reactive({
-  ready: false,
+  ready: false, publicSandbox: false,
   authenticated: false,
   csrfToken: '',
 })
@@ -33,6 +34,8 @@ export const initializeAuth = async () => {
       return
     }
     const body = await response.json()
+    authState.publicSandbox = body.public_sandbox === true
+    if (authState.publicSandbox) dataMode.value = 'sandbox'
     authState.authenticated = true
     authState.csrfToken = body.csrf_token
   } catch {

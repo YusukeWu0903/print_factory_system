@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+import StatementHistory from '@/components/StatementHistory.vue'
 import AppLayout from '@/components/AppLayout.vue'
 import { useClients } from '@/composables/useApi'
 import api from '@/services/api'
@@ -13,6 +14,7 @@ const loading = ref(false)
 const error = ref(null)
 const reconciliationData = ref(null)
 const availableMonths = ref([])
+const historyPanel = ref(null)
 const confirming = ref(false)
 const selectedWorkOrders = ref([])
 let monthsRequest = 0
@@ -103,6 +105,7 @@ const handleConfirm = async () => {
       client_id: Number(selectedClientId.value),
       work_order_ids: selectedWorkOrders.value,
     })
+    await historyPanel.value?.load()
     alert(response.data.message)
     selectedWorkOrders.value = []
     const previousMonth = selectedMonth.value
@@ -167,7 +170,7 @@ watch(selectedMonth, () => {
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1.5">客戶</label>
               <select
-                v-model="selectedClientId"
+                aria-label="客戶" v-model="selectedClientId"
                 class="w-full touch-target border border-gray-300 rounded-lg px-4 py-3 text-base bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent appearance-none"
               >
                 <option value="" disabled>請選擇客戶</option>
@@ -181,7 +184,7 @@ watch(selectedMonth, () => {
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1.5">對帳月份</label>
               <select
-                v-model="selectedMonth"
+                aria-label="對帳月份" v-model="selectedMonth"
                 :disabled="!selectedClientId || availableMonths.length === 0"
                 class="w-full touch-target border border-gray-300 rounded-lg px-4 py-3 text-base bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent appearance-none"
               >
@@ -212,7 +215,7 @@ watch(selectedMonth, () => {
         <!-- 對帳內容 -->
         <div v-else-if="reconciliationData" class="space-y-4">
           <!-- 彙總資訊卡片 -->
-          <div class="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-100 p-4">
+          <div class="bg-stone-100 rounded-xl border border-stone-300 p-4">
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div class="bg-white rounded-lg p-3 shadow-sm">
                 <p class="text-xs text-gray-500">客戶</p>
@@ -229,7 +232,7 @@ watch(selectedMonth, () => {
               </div>
               <div class="bg-white rounded-lg p-3 shadow-sm">
                 <p class="text-xs text-gray-500">總金額</p>
-                <p class="font-bold text-amber-700 text-lg">{{ formatCurrency(reconciliationData.total_amount) }}</p>
+                <p class="font-bold text-blue-800 text-lg">{{ formatCurrency(reconciliationData.total_amount) }}</p>
               </div>
             </div>
           </div>
@@ -238,11 +241,11 @@ watch(selectedMonth, () => {
           <div class="bg-white rounded-xl shadow-sm border border-amber-50 overflow-hidden">
             <div class="overflow-x-auto">
               <table class="w-full">
-                <thead class="bg-amber-50 border-b border-amber-100">
+                <thead class="bg-stone-100 border-b border-stone-300">
                   <tr>
                     <th class="w-12 px-3 py-2 text-center">
                       <input
-                        type="checkbox"
+                        type="checkbox" aria-label="全選本期工單"
                         :checked="selectedWorkOrders.length === reconciliationData.work_orders.length && reconciliationData.work_orders.length > 0"
                         :indeterminate="selectedWorkOrders.length > 0 && selectedWorkOrders.length < reconciliationData.work_orders.length"
                         @change="toggleAllWorkOrders"
@@ -257,11 +260,11 @@ watch(selectedMonth, () => {
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100">
-                  <tr v-for="wo in reconciliationData.work_orders" :key="wo.id" class="hover:bg-amber-50/50">
+                  <tr v-for="wo in reconciliationData.work_orders" :key="wo.id" class="hover:bg-stone-100/50">
                     <td class="px-3 py-3 text-center">
                       <input
                         type="checkbox"
-                        :checked="selectedWorkOrders.includes(wo.id)"
+                        :aria-label="'選取 ' + wo.item_name" :checked="selectedWorkOrders.includes(wo.id)"
                         @change="toggleWorkOrder(wo.id)"
                         class="w-5 h-5 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
                       />
@@ -271,7 +274,7 @@ watch(selectedMonth, () => {
                     <td class="px-3 py-3 text-center text-sm text-gray-600">{{ wo.quantity }}</td>
                     <td class="px-3 py-3 text-center text-xs">
                       <div class="flex flex-col items-center gap-1">
-                        <span v-if="wo.cut_type" class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded text-xs">📐 {{ wo.cut_type }}</span>
+                        <span v-if="wo.cut_type" class="bg-stone-100 text-blue-800 px-2 py-0.5 rounded text-xs">📐 {{ wo.cut_type }}</span>
                         <span v-if="wo.paper_type" class="bg-gray-50 text-gray-600 px-2 py-0.5 rounded text-xs">{{ wo.paper_type }}</span>
                         <span v-if="wo.paper_weight" class="bg-gray-50 text-gray-600 px-2 py-0.5 rounded text-xs">{{ wo.paper_weight }}</span>
                         <span v-if="wo.front_side !== null" class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs">正 {{ wo.front_side }}色</span>
@@ -286,12 +289,12 @@ watch(selectedMonth, () => {
             </div>
 
             <!-- 底部總計與操作 -->
-            <div class="bg-gray-50 border-t border-amber-100 px-4 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div class="fixed inset-x-0 bottom-0 z-30 md:static bg-white shadow-lg border-t border-stone-300 px-4 py-2 flex flex-col md:flex-row items-center justify-between gap-4">
               <div class="flex items-center gap-4">
                 <span class="text-sm text-gray-600">已選：</span>
-                <span class="text-lg font-bold text-amber-700">{{ selectedWorkOrders.length }} / {{ reconciliationData.work_orders.length }} 筆</span>
+                <span class="text-lg font-bold text-blue-800">{{ selectedWorkOrders.length }} / {{ reconciliationData.work_orders.length }} 筆</span>
                 <span class="text-sm text-gray-600">金額：</span>
-                <span class="text-lg font-bold text-amber-700">
+                <span class="text-lg font-bold text-blue-800">
                   {{ formatCurrency(
                     reconciliationData.work_orders
                       .filter(wo => selectedWorkOrders.includes(wo.id))
@@ -303,7 +306,7 @@ watch(selectedMonth, () => {
               <button
                 :disabled="selectedWorkOrders.length === 0 || confirming"
                 @click="handleConfirm"
-                class="w-full md:w-auto touch-target bg-gradient-to-r from-amber-500 to-orange-500 text-white font-semibold rounded-xl py-3 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                class="w-full md:w-auto touch-target bg-blue-700 text-white font-semibold rounded-xl py-3 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 <svg v-if="confirming" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
@@ -327,6 +330,7 @@ watch(selectedMonth, () => {
           </p>
         </div>
       </div>
+      <StatementHistory ref="historyPanel" />
     </template>
   </AppLayout>
 </template>

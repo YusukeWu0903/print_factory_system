@@ -19,6 +19,15 @@ app = FastAPI(
     debug=settings.DEBUG,
 )
 
+from sqlalchemy.orm.exc import StaleDataError
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(StaleDataError)
+async def concurrent_update(request, exc):
+    return JSONResponse(status_code=409, content={"detail": "工單已被其他人更新，請重新開啟比對。"})
+
+
 @app.middleware("http")
 async def disable_api_caching(request: Request, call_next):
     response = await call_next(request)

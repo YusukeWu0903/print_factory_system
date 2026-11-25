@@ -4,6 +4,7 @@ import AppLayout from '@/components/AppLayout.vue'
 import { useClients } from '@/composables/useApi'
 
 const { clients, loading, error, fetchClients, createClient, updateClient, deleteClient } = useClients()
+const formOpen = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 const deletingId = ref(null)
@@ -11,6 +12,7 @@ const formError = ref('')
 const form = reactive({ name: '', tax_id: '', billing_cycle: 15 })
 
 const resetForm = () => {
+  formOpen.value = false
   editingId.value = null
   form.name = ''
   form.tax_id = ''
@@ -19,6 +21,7 @@ const resetForm = () => {
 }
 
 const editClient = (client) => {
+  formOpen.value = true
   editingId.value = client.id
   form.name = client.name
   form.tax_id = client.tax_id || ''
@@ -80,10 +83,12 @@ onMounted(fetchClients)
 <template>
   <AppLayout title="客戶管理">
     <div class="p-3 space-y-4 max-w-3xl mx-auto">
-      <form @submit.prevent="saveClient" class="bg-white rounded-xl border border-amber-100 shadow-sm p-4 space-y-4">
+      <button v-if="!formOpen" class="touch-target rounded-lg bg-blue-700 text-white px-5" @click="formOpen = true">新增客戶</button>
+      <p v-if="!formOpen && formError" role="alert" class="text-red-700">{{ formError }}</p>
+      <form v-if="formOpen" @submit.prevent="saveClient" class="bg-white rounded-xl border border-stone-300 shadow-sm p-4 space-y-4">
         <div class="flex items-center justify-between">
-          <h2 class="font-semibold text-amber-900">{{ editingId ? '編輯客戶' : '新增客戶' }}</h2>
-          <button v-if="editingId" type="button" @click="resetForm" class="text-sm text-amber-700 underline">取消編輯</button>
+          <h2 class="font-semibold text-stone-900">{{ editingId ? '編輯客戶' : '新增客戶' }}</h2>
+          <button type="button" @click="resetForm" class="text-sm text-blue-800 underline">取消</button>
         </div>
         <div>
           <label for="client-name" class="block text-sm font-medium text-gray-700 mb-1">客戶名稱 *</label>
@@ -103,13 +108,13 @@ onMounted(fetchClients)
         </div>
         <p class="text-xs text-gray-500">對帳月份以此日截止；短月的 31 號改以月底截止。</p>
         <p v-if="formError" role="alert" class="text-sm text-red-700 bg-red-50 rounded-lg p-3">{{ formError }}</p>
-        <button type="submit" :disabled="saving" class="w-full touch-target rounded-xl bg-amber-600 text-white font-semibold disabled:opacity-50">
+        <button type="submit" :disabled="saving" class="w-full touch-target rounded-xl bg-blue-700 text-white font-semibold disabled:opacity-50">
           {{ saving ? '儲存中…' : editingId ? '儲存修改' : '新增客戶' }}
         </button>
       </form>
 
-      <section class="bg-white rounded-xl border border-amber-100 shadow-sm p-4">
-        <h2 class="font-semibold text-amber-900 mb-3">客戶列表</h2>
+      <section class="bg-white rounded-xl border border-stone-300 shadow-sm p-4">
+        <h2 class="font-semibold text-stone-900 mb-3">客戶列表</h2>
         <p v-if="loading" class="text-sm text-gray-500">載入中…</p>
         <p v-else-if="error" role="alert" class="text-sm text-red-700">{{ error }} <button type="button" @click="fetchClients" class="underline">重試</button></p>
         <p v-else-if="clients.length === 0" class="text-sm text-gray-500">尚無客戶</p>
@@ -120,7 +125,7 @@ onMounted(fetchClients)
               <p class="text-xs text-gray-500">統編：{{ client.tax_id || '未填' }} · 每月 {{ client.billing_cycle }} 號結帳</p>
             </div>
             <div class="flex gap-2">
-              <button type="button" @click="editClient(client)" class="touch-target px-3 rounded-lg bg-amber-50 text-amber-800">編輯</button>
+              <button type="button" @click="editClient(client)" class="touch-target px-3 rounded-lg bg-stone-100 text-amber-800">編輯</button>
               <button type="button" @click="removeClient(client)" :disabled="deletingId === client.id" class="touch-target px-3 rounded-lg bg-red-50 text-red-700 disabled:opacity-50">刪除</button>
             </div>
           </article>
