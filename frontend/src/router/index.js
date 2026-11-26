@@ -4,7 +4,10 @@ import CreateWorkOrder from '@/views/CreateWorkOrder.vue'
 import Reconciliation from '@/views/Reconciliation.vue'
 import Clients from '@/views/Clients.vue'
 
+import CustomerProgress from '@/views/CustomerProgress.vue'
+
 const routes = [
+  {path:'/progress', component: CustomerProgress},
   {
     path: '/',
     name: 'WorkOrderList',

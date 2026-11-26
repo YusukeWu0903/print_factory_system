@@ -322,3 +322,144 @@ def test_order_edit_history_and_stale_revision(client):
     history = client.get(url+"/history").json()
     assert [e["action"] for e in history] == ["修改","建立"]
     assert history[0]["changes"]["quantity"] == ["10","12"]
+
+def test_personal_worker_can_only_report_completion(client):
+    admin = login(client)
+    cid = create_client(client, admin)
+    w = client.post("/api/work-orders/",headers=admin,json={"date":"2026-11-25","item_name":"回報測試","quantity":20,"client_id":cid}).json()
+    path="/api/staff/accounts"
+    assert client.post(path,headers=admin,json={"username":"陳師傅","password":"demo-worker-password"}).status_code==201
+    client.cookies.clear()
+    assert client.get("/api/auth/employee-names").json() == ["陳師傅"]
+    assert client.post("/api/auth/login",json={"username":"陳師傅","password":"wrong"}).status_code == 401
+    res=client.post("/api/auth/login",json={"username":"陳師傅","password":"demo-worker-password"}).json()
+    assert res["role"]=="employee"
+    h={"X-CSRF-Token":res["csrf_token"]}
+    assert client.get(path).status_code==403
+    assert client.get("/api/work-orders/").status_code==403
+    order=client.get("/api/staff/orders").json()[0]
+    assert order["completed_quantity"] is None
+    url=f"/api/staff/orders/{w['id']}"
+    payload={"completed_quantity":0,"revision":order["revision"]}
+    assert client.patch(url,headers=h,json={**payload,"quantity":999}).status_code==422
+    assert client.patch(url,headers=h,json=payload).json()["completed_quantity"]==0
+    assert client.patch(url,headers=h,json={**payload,"completed_quantity":7}).status_code==409
+    assert client.patch("/api/work-orders/"+str(w["id"]),headers=h,json={"quantity":999,"expected_revision":1}).status_code==403
+    worker_cookie=client.cookies.get("__Host-print_factory_session")
+    admin=login(client)
+    history=client.get(f"/api/work-orders/{w['id']}/history").json()
+    assert history[0]["actor"]=="師傅：陳師傅" and history[0]["changes"]["completed_quantity"]==[None,"0"]
+    assert client.patch(path,params={"username":"陳師傅"},headers=admin,json={"active":False}).status_code==200
+    client.cookies.clear()
+    client.cookies.set("__Host-print_factory_session",worker_cookie)
+    assert client.get("/api/staff/orders").status_code==401
+    assert client.get("/api/auth/employee-names").json() == []
+
+def test_order_paper_sections_round_trip(client):
+    h=login(client)
+    cid=create_client(client,h)
+    payload={"client_id":cid,"item_name":"分段測試","date":"2026-11-25","paper_input":"3 令＋100 張",
+             "plate_info":"部分換版","press_actual":"1250 車","press_waste":"50","press_runs":"2.25","finisher":"新平"}
+    res=client.post("/api/work-orders/",headers=h,json=payload)
+    assert res.status_code==201
+    w=res.json()
+    assert all(w[key]==v for key,v in payload.items())
+    url="/api/work-orders/"+str(w["id"])
+    result=client.patch(url,headers=h,json={"expected_revision":w["revision"],"due_date":"11/30 上午"})
+    assert result.status_code==200 and result.json()["paper_input"]==payload["paper_input"]
+    assert client.get("/api/work-orders/").json()[0]["due_date"]=="11/30 上午"
+
+def test_custom_size_only_shared_when_requested(client):
+    h=login(client)
+    cid=create_client(client,h)
+    path="/api/work-orders/"
+    menu=path+"paper-sizes"
+    defaults=["31 × 43 英吋","24.5 × 34.5 英吋"]
+    assert client.get(menu).json()==defaults
+    order={"client_id":cid,"date":"2026-11-25","item_name":"尺寸測試","paper_size":"35.5 × 50 公分"}
+    res=client.post(path,headers=h,json=order)
+    assert res.status_code==201 and res.json()["paper_size"]==order["paper_size"]
+    assert client.get(menu).json()==defaults
+    w=res.json()
+    assert client.patch(path+str(w["id"]),headers=h,json={"expected_revision":w["revision"],"remember_paper_size":True}).status_code==200
+    assert client.post(path,headers=h,json={**order,"remember_paper_size":True}).status_code==201
+    assert client.get(menu).json()==defaults+[order["paper_size"]]
+
+def test_combined_order_reports_each_piece(client):
+    admin = login(client)
+    cid = create_client(client, admin)
+    spec = {
+        "student_paper": {"quantity": "1600+150", "paper": "31×43 60g珍白", "reams": "6.5"},
+        "teacher_paper": {"quantity": "200+100", "paper": "31×43 70g上質 UPM", "reams": "2.15"},
+        "student": {"runs": [{"colors": "1/1", "presses": "0.5", "reams": "0.95"}]},
+        "teacher": {"instruction": "大紅"}, "answer": {"runs": [{"presses": "0.25"}]},
+    }
+    order = client.post("/api/work-orders/", headers=admin, json={
+        "date": "2026-11-25", "client_id": cid, "item_name": "國中B+卷國文(6)", "combined": spec
+    }).json()
+    oid = order["id"]
+    url = f"/api/work-orders/{oid}"
+    assert order["combined"]["teacher_paper"] == spec["teacher_paper"]
+    assert client.post("/api/staff/accounts", headers=admin, json={
+        "username": "測試師傅", "password": "testing-worker"
+    }).status_code == 201
+    client.cookies.clear()
+    token = client.post("/api/auth/login", json={"username": "測試師傅", "password": "testing-worker"}).json()
+    employee = {"X-CSRF-Token": token["csrf_token"]}
+    worker_url = f"/api/staff/orders/{oid}"
+    revision = order["revision"]
+    assert client.patch(worker_url, headers=employee, json={
+        "completed_quantity": 1, "revision": revision
+    }).status_code == 422
+    for piece, quantity in [("student", 1750), ("teacher", 300)]:
+        res = client.patch(worker_url, headers=employee, json={
+            "piece": piece, "completed_quantity": quantity, "revision": revision
+        })
+        assert res.status_code == 200, res.text
+        revision = res.json()["revision"]
+    assert client.get("/api/staff/orders").json()[0]["piece_reports"] == {"student":1750, "teacher":300}
+    assert client.patch(worker_url, headers=employee, json={
+        "piece": "answer", "completed_quantity": 300, "revision": order["revision"]
+    }).status_code == 409
+    admin = login(client)
+    assert client.get(url + "/history").json()[0]["changes"] == {"teacher_quantity":[None,"300"]}
+    assert client.patch(url+"/status", headers=admin, json={"status":"已完成_待請款"}).status_code == 409
+    client.cookies.clear()
+    token = client.post("/api/auth/login", json={"username":"測試師傅", "password":"testing-worker"}).json()
+    res = client.patch(worker_url, headers={"X-CSRF-Token":token["csrf_token"]}, json={
+        "piece":"answer", "completed_quantity":300, "revision":revision
+    })
+    assert res.json()["piece_reports"] == {"student":1750, "teacher":300, "answer":300}
+    assert client.patch(url+"/status", headers=login(client), json={"status":"已完成_待請款"}).status_code == 200
+
+def test_planned_progress_filters_and_start(client):
+    headers = login(client)
+    cid = create_client(client, headers)
+    endpoint = "/api/work-orders/"
+    w = client.post(endpoint, headers=headers, json={"client_id":cid,"item_name":"排印測試",
+        "date":"2026-11-25","status":"排印","plate_number":"11-547","book_count":"1600+150"}).json()
+    url = endpoint + str(w["id"])
+    assert client.get(endpoint,params={"client_id":cid,"status":"排印"}).json()[0]["plate_number"] == "11-547"
+    assert client.get(endpoint,params={"client_id":cid+100}).json() == []
+    assert client.patch(url+"/status",headers=headers,json={"status":"已完成_待請款"}).status_code == 400
+    assert client.patch(url+"/status",headers=headers,json={"status":"印製中"}).json()["status"] == "印製中"
+
+def test_export_ledger_preserves_work_order_and_piece_values(client):
+    from io import BytesIO
+    from openpyxl import load_workbook
+    h = login(client)
+    cid = create_client(client,h)
+    spec = {"student_paper":{"quantity":"1600+150","reams":"6.5"},"teacher_paper":{"paper":"70g"},
+            "student":{},"teacher":{},"answer":{"runs":[{"presses":"0.25","reams":"0.15"}]}}
+    w = client.post("/api/work-orders/",headers=h,json={"date":"2026-11-25","client_id":cid,
+        "item_name":"=測試","client_order_no":"001","quantity":10,"wage":2,"combined":spec}).json()
+    result = client.get("/api/work-orders/ledger.xlsx",headers=h)
+    assert result.status_code == 200, result.text
+    book = load_workbook(BytesIO(result.content))
+    sheet = book["工單總表"]
+    record = dict(zip(next(sheet.values),list(sheet.values)[1]))
+    assert record["系統工單號"] == w["id"] and record["總金額"] == 20
+    assert record["客戶單號"] == "001" and sheet["G2"].data_type == "s"
+    assert list(book["學教用紙"].values)[1][2] == "1600+150"
+    assert book["分項回報"].max_row == 4
+    assert list(book["印刷明細"].values)[1][4] == "0.25"

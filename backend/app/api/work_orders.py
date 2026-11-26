@@ -1,7 +1,12 @@
 # print_factory_system/backend/app/api/work_orders.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, Column, String
+from sqlalchemy.dialects.sqlite import insert
+from app.core.database import Base
+import re
+from hashlib import sha256
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
@@ -9,7 +14,7 @@ from app.core.database import get_db
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.models.client import Client
 from app.schemas.work_order import (
-    WorkOrderCreate,
+    PaperSections, WorkOrderCreate,
     WorkOrderUpdate,
     WorkOrderStatusUpdate,
     WorkOrderResponse,
@@ -19,9 +24,92 @@ from app.schemas.work_order import (
 router = APIRouter()
 
 
+DEFAULT_SIZES = ("31 × 43 英吋", "24.5 × 34.5 英吋")
+
+
+class PaperSizePreset(Base):
+    __tablename__ = "paper_size_presets"
+    label = Column(String(100), primary_key=True)
+
+
+@router.get("/ledger.xlsx")
+def download_ledger(db: Session = Depends(get_db)):
+    from fastapi.responses import Response
+    from app.api.ledger_export import export_ledger
+    return Response(export_ledger(db),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="work-orders.xlsx"'})
+
+
+@router.post("/excel-preview")
+async def preview_excel(request: Request, db: Session = Depends(get_db)):
+    from starlette.concurrency import run_in_threadpool
+    from app.api.excel_ticket import preview
+    data = bytearray()
+    async for chunk in request.stream():
+        if len(data) + len(chunk) > 2_000_000:
+            raise HTTPException(413, "Excel 檔案上限為 2 MB")
+        data.extend(chunk)
+    result = await run_in_threadpool(preview, data)
+    result["source_hash"] = sha256(data).hexdigest()
+    return result
+
+
+@router.get("/paper-sizes")
+def list_paper_sizes(db: Session = Depends(get_db)):
+    return [*DEFAULT_SIZES, *(label for label, in db.query(PaperSizePreset.label).order_by(PaperSizePreset.label)
+                              if label not in DEFAULT_SIZES)]
+
+
+def remember_size(db, label):
+    match = re.fullmatch(r"(\d{1,6}(?:\.\d{1,5})?) × (\d{1,6}(?:\.\d{1,5})?) (英吋|公分)", label or "")
+    if not match or min(Decimal(match[1]), Decimal(match[2])) <= 0:
+        raise HTTPException(422, "請填寫有效的寬、高與單位")
+    if label not in DEFAULT_SIZES:
+        db.execute(insert(PaperSizePreset).values(label=label).on_conflict_do_nothing())
+
+
 def calculate_total(paper_fee: Decimal, plate_fee: Decimal, wage: Decimal, quantity: int) -> Decimal:
     """計算總金額：(紙錢 + 版費 + 印工) * 數量"""
     return (paper_fee + plate_fee + wage) * quantity
+
+
+class MigrationReceipt(Base):
+    __tablename__ = "work_order_migration_receipts"
+    source_hash = Column(String(64), primary_key=True)
+
+
+class MigrationOrder(WorkOrderCreate):
+    source_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: WorkOrderStatus
+
+
+class MigrationBatch(BaseModel):
+    orders: list[MigrationOrder] = Field(min_length=1, max_length=100)
+
+
+@router.post("/migrate")
+def migrate_orders(batch: MigrationBatch, db: Session = Depends(get_db)):
+    added, skipped = [], []
+    for row in batch.orders:
+        if not db.get(Client, row.client_id):
+            raise HTTPException(422, "請選擇已建立的客戶")
+        receipt = db.execute(insert(MigrationReceipt).values(source_hash=row.source_hash)
+                             .on_conflict_do_nothing())
+        number = (row.client_order_no or "").strip()
+        if not receipt.rowcount or (number and db.query(WorkOrder.id).filter_by(
+                client_id=row.client_id, client_order_no=number).first()):
+            skipped.append(row.item_name)
+            continue
+        values = row.model_dump(exclude={"source_hash","remember_paper_size","status"})
+        values["client_order_no"] = number or None
+        order = WorkOrder(**values, status=row.status, total_amount=calculate_total(
+            row.paper_fee, row.plate_fee, row.wage, row.quantity))
+        db.add(order)
+        db.flush()
+        added.append(order.id)
+    db.commit()
+    return {"added": added, "skipped": skipped}
 
 
 @router.post("/", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
@@ -42,10 +130,12 @@ def create_work_order(work_order: WorkOrderCreate, db: Session = Depends(get_db)
         work_order.quantity,
     )
 
+    if work_order.remember_paper_size:
+        remember_size(db, work_order.paper_size)
     db_work_order = WorkOrder(
-        **work_order.model_dump(),
+        **work_order.model_dump(exclude={"remember_paper_size","status"}),
         total_amount=total_amount,
-        status=WorkOrderStatus.PRINTING,
+        status=WorkOrderStatus(work_order.status),
     )
     db.add(db_work_order)
     db.commit()
@@ -88,7 +178,8 @@ def list_work_orders(
 
     return [
         WorkOrderListResponse(
-            id=wo.id, revision=wo.revision, updated_at=wo.updated_at,
+            id=wo.id, piece_reports=wo.piece_reports, completed_quantity=wo.completed_quantity, revision=wo.revision, updated_at=wo.updated_at,
+            **{key: getattr(wo,key) for key in PaperSections.model_fields},
             date=wo.date,
             client_name=wo.client.name if wo.client else "未知客戶",
             client_id=wo.client_id,
@@ -151,6 +242,10 @@ def update_work_order(
 
     if update_data.pop("expected_revision") != work_order.revision:
         raise HTTPException(409, "工單已有更新。請保留輸入內容，重新開啟工單比對後再儲存。")
+    if update_data.pop("remember_paper_size", False):
+        remember_size(db, update_data.get("paper_size",work_order.paper_size))
+    if "combined" in update_data and bool(update_data["combined"]) != bool(work_order.combined):
+        raise HTTPException(422, "已建立的工單請保留原版型")
     # Verify client exists if client_id is being updated
     if "client_id" in update_data:
         client = db.query(Client).filter(Client.id == update_data["client_id"]).first()
@@ -202,11 +297,16 @@ def update_work_order_status(
 
     # Define allowed transitions
     allowed_transitions = {
+        WorkOrderStatus.PLANNED: [WorkOrderStatus.PRINTING],
         WorkOrderStatus.PRINTING: [WorkOrderStatus.COMPLETED_PENDING_BILLING],
         WorkOrderStatus.COMPLETED_PENDING_BILLING: [WorkOrderStatus.BILLED, WorkOrderStatus.PRINTING],
         WorkOrderStatus.BILLED: [WorkOrderStatus.COMPLETED_PENDING_BILLING],  # Allow rollback for corrections
     }
 
+    if (work_order.combined and new_status == WorkOrderStatus.COMPLETED_PENDING_BILLING
+            and current_status == WorkOrderStatus.PRINTING
+            and set(work_order.piece_reports or {}) != {"student", "teacher", "answer"}):
+        raise HTTPException(409, "仍有印件待回報，請核對學用、教用正文與解答")
     if new_status not in allowed_transitions.get(current_status, []):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -239,10 +339,10 @@ def delete_work_order(work_order_id: int, db: Session = Depends(get_db)):
         )
 
     # Only allow deletion of PRINTING status orders
-    if work_order.status != WorkOrderStatus.PRINTING:
+    if work_order.status not in (WorkOrderStatus.PLANNED, WorkOrderStatus.PRINTING):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="只能刪除「印製中」狀態的工單",
+            detail="只能刪除排印或印製中的工單",
         )
 
     db.delete(work_order)

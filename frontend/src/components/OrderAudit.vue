@@ -3,7 +3,7 @@ import { ref, watch } from 'vue'
 import api from '@/services/api'
 const props = defineProps({order:Object})
 const opened=ref(false), entries=ref([]), error=ref(''), loading=ref(false)
-const labels={date:'日期',client_id:'客戶編號',item_name:'品名',quantity:'數量',client_order_no:'客戶單號',paper_weight:'紙磅',paper_type:'紙別',cut_type:'裁別',front_side:'正面色數',back_side:'反面色數',operator:'人員',notes:'備註',paper_fee:'紙錢',plate_fee:'版費',wage:'印工',total_amount:'總金額',status:'狀態'}
+const labels={plate_number:'製版編號',book_count:'來單本數',student_quantity:'學用完成數量',teacher_quantity:'教用正文完成數量',answer_quantity:'解答完成數量',combined:'合併工單規格',paper_size:'入紙尺寸',paper_input:'入紙數量（令／張）',plate_info:'版材資訊',press_size:'印刷尺寸',press_actual:'印刷實數',press_waste:'放損',press_runs:'台數',press_ink:'印刷顏色',finisher:'後加工廠',due_date:'交期',completed_quantity:'完成數量',date:'日期',client_id:'客戶編號',item_name:'品名',quantity:'數量',client_order_no:'客戶單號',paper_weight:'紙磅',paper_type:'紙別',cut_type:'裁別',front_side:'正面色數',back_side:'反面色數',operator:'人員',notes:'備註',paper_fee:'紙錢',plate_fee:'版費',wage:'印工',total_amount:'總金額',status:'狀態'}
 const time=t=>new Date(t).toLocaleString('zh-TW',{timeZone:'Asia/Taipei',hour12:false})
 async function load(){
   if(!opened.value)return

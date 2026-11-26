@@ -38,6 +38,8 @@ async def disable_api_caching(request: Request, call_next):
     return response
 
 # Include routers
+from app.api.staff import router as staff_router
+app.include_router(staff_router, prefix="/api/staff")
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(clients.router, prefix="/api/clients", tags=["Clients"], dependencies=[Depends(require_admin)])
 app.include_router(work_orders.router, prefix="/api/work-orders", tags=["Work Orders"], dependencies=[Depends(require_admin)])

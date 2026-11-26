@@ -10,6 +10,7 @@ from sqlalchemy.orm import object_session
 
 
 class WorkOrderStatus(str, enum.Enum):
+    PLANNED = "排印"
     PRINTING = "印製中"
     COMPLETED_PENDING_BILLING = "已完成_待請款"
     BILLED = "已請款"
@@ -19,6 +20,21 @@ class WorkOrder(Base):
     __tablename__ = "work_orders"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    plate_number = Column(String(200))
+    book_count = Column(String(200))
+    paper_size = Column(String(200), nullable=True)
+    paper_input = Column(String(200), nullable=True)
+    plate_info = Column(String(200), nullable=True)
+    press_size = Column(String(200), nullable=True)
+    press_actual = Column(String(200), nullable=True)
+    press_waste = Column(String(200), nullable=True)
+    press_runs = Column(String(200), nullable=True)
+    press_ink = Column(String(200), nullable=True)
+    finisher = Column(String(200), nullable=True)
+    due_date = Column(String(200), nullable=True)
+    combined = Column(JSON, nullable=True)
+    piece_reports = Column(JSON, nullable=True)
+    completed_quantity = Column(Integer, nullable=True)
     revision = Column(Integer, nullable=False, default=1)
     __mapper_args__ = {"version_id_col": revision}
     audit_key = Column(String(32))
@@ -100,6 +116,12 @@ def record_update(mapper, connection, order):
         history = inspect(order).attrs[key].history
         if history.has_changes():
             before = history.deleted[0] if history.deleted else None
+            if key == "piece_reports":
+                for piece, amount in (order.piece_reports or {}).items():
+                    previous = (before or {}).get(piece)
+                    if previous != amount:
+                        changes[piece + "_quantity"] = [printable(previous), printable(amount)]
+                continue
             changes[key] = [printable(before), printable(getattr(order, key))]
     if changes:
         order.audit_key = order.audit_key or uuid4().hex

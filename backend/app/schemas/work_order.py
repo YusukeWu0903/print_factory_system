@@ -5,7 +5,59 @@ from datetime import date
 from decimal import Decimal
 
 
-class WorkOrderBase(BaseModel):
+from typing import Annotated, Literal
+from pydantic import ConfigDict
+
+ShortText = Annotated[str, Field(max_length=200)]
+PieceName = Literal["student", "teacher", "answer"]
+
+
+class PrintRun(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    colors: ShortText = ""
+    presses: ShortText = ""
+    demand: ShortText = ""
+    waste: ShortText = ""
+    reams: ShortText = ""
+    note: ShortText = ""
+
+
+class VersionPaper(BaseModel):
+    quantity: ShortText = ""
+    paper: ShortText = ""
+    reams: ShortText = ""
+
+
+class PrintPiece(BaseModel):
+    instruction: ShortText = ""
+    runs: list[PrintRun] = Field(default_factory=list, max_length=100)
+
+
+class CombinedOrder(BaseModel):
+    student_paper: VersionPaper
+    teacher_paper: VersionPaper
+    student: PrintPiece
+    teacher: PrintPiece
+    answer: PrintPiece
+
+
+class PaperSections(BaseModel):
+    plate_number: ShortText | None = None
+    book_count: ShortText | None = None
+    combined: CombinedOrder | None = None
+    paper_size: Optional[str] = Field(default=None, max_length=200)
+    paper_input: Optional[str] = Field(default=None, max_length=200)
+    plate_info: Optional[str] = Field(default=None, max_length=200)
+    press_size: Optional[str] = Field(default=None, max_length=200)
+    press_actual: Optional[str] = Field(default=None, max_length=200)
+    press_waste: Optional[str] = Field(default=None, max_length=200)
+    press_runs: Optional[str] = Field(default=None, max_length=200)
+    press_ink: Optional[str] = Field(default=None, max_length=200)
+    finisher: Optional[str] = Field(default=None, max_length=200)
+    due_date: Optional[str] = Field(default=None, max_length=200)
+
+
+class WorkOrderBase(PaperSections):
     date: date
     client_id: int
     item_name: str = Field(min_length=1, max_length=200)
@@ -36,10 +88,12 @@ class WorkOrderBase(BaseModel):
 
 
 class WorkOrderCreate(WorkOrderBase):
-    pass
+    status: Literal["排印", "印製中"] = "印製中"
+    remember_paper_size: bool = False
 
 
-class WorkOrderUpdate(BaseModel):
+class WorkOrderUpdate(PaperSections):
+    remember_paper_size: bool = False
     expected_revision: int = Field(ge=1)
     date: Optional[date] = None
     client_id: Optional[int] = None
@@ -77,6 +131,8 @@ class WorkOrderStatusUpdate(BaseModel):
 
 
 class WorkOrderResponse(WorkOrderBase):
+    piece_reports: dict[PieceName, int] | None = None
+    completed_quantity: Optional[int] = None
     revision: int
     updated_at: Optional[str] = None
     id: int
@@ -87,8 +143,9 @@ class WorkOrderResponse(WorkOrderBase):
     @classmethod
     def from_orm_with_client(cls, obj):
         data = {
-            "id": obj.id,
-            "revision": obj.revision, "updated_at": obj.updated_at,
+            "id": obj.id, "piece_reports": obj.piece_reports,
+            **{key: getattr(obj, key) for key in PaperSections.model_fields},
+            "completed_quantity": obj.completed_quantity, "revision": obj.revision, "updated_at": obj.updated_at,
             "date": obj.date,
             "client_id": obj.client_id,
             "item_name": obj.item_name,
@@ -111,7 +168,9 @@ class WorkOrderResponse(WorkOrderBase):
         return cls(**data)
 
 
-class WorkOrderListResponse(BaseModel):
+class WorkOrderListResponse(PaperSections):
+    piece_reports: dict[PieceName, int] | None = None
+    completed_quantity: Optional[int] = None
     revision: int
     updated_at: Optional[str] = None
     id: int

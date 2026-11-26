@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { dataMode } from './dataMode'
 
 export const authState = reactive({
-  ready: false, publicSandbox: false,
+  role: null, username: null, ready: false, publicSandbox: false,
   authenticated: false,
   csrfToken: '',
 })
@@ -36,7 +36,8 @@ export const initializeAuth = async () => {
     const body = await response.json()
     authState.publicSandbox = body.public_sandbox === true
     if (authState.publicSandbox) dataMode.value = 'sandbox'
-    authState.authenticated = true
+    authState.role = body.role; authState.username = body.username
+  authState.authenticated = true
     authState.csrfToken = body.csrf_token
   } catch {
     markLoggedOut()
@@ -45,16 +46,17 @@ export const initializeAuth = async () => {
   }
 }
 
-export const login = async (password) => {
+export const login = async (password, username = "") => {
   const response = await fetch('/api/auth/login', {
     method: 'POST',
     credentials: 'same-origin',
     cache: 'no-store',
     headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, username }),
   })
   if (!response.ok) throw new Error(await readError(response, '登入失敗'))
   const body = await response.json()
+  authState.role = body.role; authState.username = body.username
   authState.authenticated = true
   authState.csrfToken = body.csrf_token
   authState.ready = true

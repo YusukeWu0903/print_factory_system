@@ -58,6 +58,7 @@ app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
 @app.get("/")
 @app.get("/create")
+@app.get("/progress")
 @app.get("/clients")
 @app.get("/reconciliation")
 def index():

@@ -38,9 +38,11 @@ def ensure_schema(engine) -> None:
     }
 
     columns = {c["name"] for c in inspector.get_columns("work_orders")} if "work_orders" in tables else set()
-    additions = {"revision": "INTEGER NOT NULL DEFAULT 1", "updated_at": "VARCHAR(40)", "audit_key": "VARCHAR(32)"}
+    needs_employee = "auth_sessions" in tables and "employee" not in {c["name"] for c in inspector.get_columns("auth_sessions")}
+    additions = {"combined": "JSON", "piece_reports": "JSON", "completed_quantity": "INTEGER", "revision": "INTEGER NOT NULL DEFAULT 1", "updated_at": "VARCHAR(40)", "audit_key": "VARCHAR(32)"}
+    additions.update(dict.fromkeys(('plate_number', 'book_count', 'paper_size', 'paper_input', 'plate_info', 'press_size', 'press_actual', 'press_waste', 'press_runs', 'press_ink', 'finisher', 'due_date'), "VARCHAR(200)"))
     missing = set(additions) - columns if columns else set()
-    if (missing or (bool(tables) and "statements" not in tables) or needs_order_number or needs_session_table or needs_session_credential) and engine.url.get_backend_name() == "sqlite":
+    if ((bool(tables) and "paper_size_presets" not in tables) or needs_employee or missing or (bool(tables) and "statements" not in tables) or needs_order_number or needs_session_table or needs_session_credential) and engine.url.get_backend_name() == "sqlite":
         database_name = engine.url.database
         if database_name and database_name != ":memory:":
             database_path = Path(database_name)
@@ -65,6 +67,8 @@ def ensure_schema(engine) -> None:
             )
 
     with engine.begin() as connection:
+        if needs_employee:
+            connection.exec_driver_sql("ALTER TABLE auth_sessions ADD COLUMN employee VARCHAR(50)")
         for name in sorted(missing):
             connection.exec_driver_sql(f"ALTER TABLE work_orders ADD COLUMN {name} {additions[name]}")
     Base.metadata.create_all(bind=engine)

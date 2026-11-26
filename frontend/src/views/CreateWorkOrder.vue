@@ -2,6 +2,12 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import api from '@/services/api'
+import { customerFields, shopFields } from '@/services/paperSections'
+const plateOptions = ['新版', '改版', '再版', '換版', '部分換版']
+const paperDefaults = () => Object.fromEntries(Object.keys({...customerFields,...shopFields}).map(key=>[key,'']))
+import { splitPaperInput, formatPaperInput } from '@/services/paperInput'
+import CombinedOrder from '@/components/CombinedOrder.vue'
+import { emptyCombined } from '@/services/combined'
 import PhotoImport from '@/components/PhotoImport.vue'
 import { authState } from '@/services/auth'
 import AppLayout from '@/components/AppLayout.vue'
@@ -21,7 +27,9 @@ const todayLocal = () => {
 }
 
 const form = ref({
-  date: todayLocal(),
+  ...paperDefaults(),
+    combined: null,
+    date: todayLocal(),
   client_id: '',
   item_name: '',
   quantity: 1,
@@ -44,10 +52,35 @@ const form = ref({
 
 const editId = route.query.edit
 const editing = editId !== undefined
+const initialStatus = ref('印製中')
 const ready = ref(!editing)
 const loadError = ref('')
 const original = {}
 const listLocation = {path: '/', query: { samples: route.query.samples }}
+// 澤福用紙規則；只依裁別判斷，不使用成品數量推算。
+const sheetsPerReam = computed(() => {
+  const cut = (form.value.cut_type || '').normalize('NFKC').trim().toUpperCase()
+  return { '菊全開': 500, '2K': 1000 }[cut] ?? null
+})
+
+const customerFold = ref(null), shopFold = ref(null), reported = ref(null)
+const sizes = ref(['31 × 43 英吋', '24.5 × 34.5 英吋'])
+const sizeLoadError = ref(false)
+const customSize = ref(false)
+const width = ref(''), height = ref(''), unit = ref('英吋'), rememberSize = ref(false)
+async function loadSizes() {
+  try { sizes.value = (await api.get('/work-orders/paper-sizes')).data; sizeLoadError.value = false }
+  catch { sizeLoadError.value = true }
+}
+function pickSize(value) {
+  customSize.value = value === '__custom'
+  rememberSize.value = false
+  if (!customSize.value) form.value.paper_size = value
+}
+const dimensionOK = value => /^\d{1,6}(?:\.\d{1,5})?$/.test(value) && Number(value) > 0
+const reams = ref('')
+const sheets = ref('')
+const paperChanged = ref(false)
 const errors = ref({})
 const submitting = ref(false)
 
@@ -76,6 +109,11 @@ const formatCurrency = (amount) => {
 
 const validateForm = () => {
   errors.value = {}
+  if (customSize.value && (!dimensionOK(width.value) || !dimensionOK(height.value))) errors.value.paper_size = "請輸入大於零的寬、高（最多五位小數）"
+  if ((reams.value && !/^\d+(?:\.\d+)?$/.test(reams.value)) ||
+      (sheets.value && !/^\d+$/.test(sheets.value))) {
+    errors.value.paper_input = '令數可含小數，加張請填整張數。'
+  }
   if (!form.value.date) errors.value.date = '請選擇日期'
   if (!form.value.client_id) errors.value.client_id = '請選擇客戶'
   if (!form.value.item_name.trim()) errors.value.item_name = '請輸入品名'
@@ -97,11 +135,20 @@ const validateNewClient = () => {
 }
 
 const handleSubmit = async () => {
-  if (!ready.value || submitting.value || !validateForm()) return
+  if (!ready.value || submitting.value) return
+  if (!validateForm()) {
+    customerFold.value.open = true
+    shopFold.value.open = true
+    return
+  }
 
   submitting.value = true
   try {
     const payload = {
+      ...Object.fromEntries(Object.keys(paperDefaults()).map(key=>[key,form.value[key] || null])),
+      paper_size: customSize.value ? Number(width.value) + ' × ' + Number(height.value) + ' ' + unit.value : form.value.paper_size || null,
+      paper_input: (paperChanged.value ? formatPaperInput(reams.value, sheets.value) : form.value.paper_input) || null,
+      combined: form.value.combined,
       date: form.value.date,
       client_id: Number(form.value.client_id),
       item_name: form.value.item_name.trim(),
@@ -120,10 +167,11 @@ const handleSubmit = async () => {
     }
     if (editing) {
       const changes = Object.fromEntries(Object.entries(payload).filter(([key, value]) =>
-        String(value ?? '') !== String(original[key] ?? '')
+        key === 'combined' ? JSON.stringify(value) !== original.combined : String(value ?? '') !== String(original[key] ?? '')
       ))
+      if (customSize.value && rememberSize.value) changes.remember_paper_size = true
       if (Object.keys(changes).length) await updateWorkOrder(editId, { ...changes, expected_revision: original.revision })
-    } else await createWorkOrder(payload)
+    } else await createWorkOrder({...payload, status:initialStatus.value, remember_paper_size:customSize.value && rememberSize.value})
     router.push(listLocation)
   } catch (err) {
     const detail = err.response?.data?.detail
@@ -175,7 +223,12 @@ const handleCreateClient = async () => {
 }
 
 const resetForm = () => {
+  initialStatus.value='印製中'
+  customSize.value=false; width.value=''; height.value=''; unit.value='英吋'; rememberSize.value=false
+  reams.value = ''; sheets.value = ''; paperChanged.value = false
   form.value = {
+    ...paperDefaults(),
+    combined: null,
     date: todayLocal(),
     client_id: '',
     item_name: '',
@@ -197,15 +250,18 @@ const resetForm = () => {
 
 onMounted(async () => {
   fetchClients()
+  loadSizes()
   if (!editing) return
   try {
     if (!/^\d+$/.test(editId)) throw new Error()
     const {data} = await api.get('/work-orders/' + editId)
+    reported.value = data.completed_quantity
     for (const key of Object.keys(form.value)) {
       const value = data[key] ?? form.value[key]
       form.value[key] = ['paper_fee','plate_fee','wage'].includes(key) ? Number(value) : value
     }
-    Object.assign(original, form.value, { revision: data.revision })
+    ;[reams.value, sheets.value] = splitPaperInput(form.value.paper_input)
+    Object.assign(original, form.value, { combined: JSON.stringify(data.combined ?? null), revision: data.revision })
     ready.value = true
   } catch { loadError.value = '無法讀取這張工單，請返回列表再試。' }
 })
@@ -215,10 +271,20 @@ onMounted(async () => {
   <AppLayout :title="editing ? '編輯工單 #' + editId : '新增工單'" :showBack="true" :fabAction="null">
     <template #default>
       <p v-if="loadError" role="alert">{{ loadError }}</p><p v-else-if="!ready">載入工單中…</p>
-      <form v-else @submit.prevent="handleSubmit" class="bg-white border rounded-xl p-4 sm:p-6 max-w-3xl mx-auto space-y-4" novalidate>
-        <fieldset class="space-y-4"><legend class="font-semibold">客戶與品項</legend><PhotoImport v-if="authState.publicSandbox" @apply="Object.assign(form, $event)" />
+      <form v-else @submit.prevent="handleSubmit" class="order-editor border rounded-xl p-4 sm:p-6 max-w-3xl mx-auto space-y-4" novalidate>
+        <label v-if="!editing" class="block">生產進度
+          <select v-model="initialStatus" class="block border w-full p-2">
+            <option>排印</option><option>印製中</option>
+          </select>
+        </label>
+        <label class="block">工單版型
+          <select :value="form.combined ? 'combined' : 'standard'" :disabled="editing" class="block border w-full p-2" @change="form.combined = $event.target.value === 'combined' ? emptyCombined() : null">
+            <option value="standard">一般工單</option><option value="combined">學用／教用合併工單</option>
+          </select>
+        </label>
+        <details open class="paper-fold" ref="customerFold"><summary>客戶來單資料</summary><fieldset class="space-y-4"><PhotoImport v-if="authState.publicSandbox" @apply="Object.assign(form, $event)" />
         <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1.5">工單日期</label>
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">訂單日期</label>
           <input
             v-model="form.date"
             type="date"
@@ -230,7 +296,7 @@ onMounted(async () => {
         </div>
 
         <!-- Client Select with New Client Button -->
-        <div>
+        <div class="key-field">
           <div class="flex items-center justify-between mb-1.5">
             <label class="block text-sm font-medium text-gray-700">客戶名稱</label>
             <button
@@ -259,7 +325,7 @@ onMounted(async () => {
         </div>
 
         <!-- Item Name -->
-        <div>
+        <div class="key-field">
           <label class="block text-sm font-medium text-gray-700 mb-1.5">品名</label>
           <input
             v-model="form.item_name"
@@ -274,8 +340,8 @@ onMounted(async () => {
         </div>
 
         <!-- Quantity -->
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1.5">數量(令)</label>
+        <div class="key-field">
+          <label class="block text-sm font-medium text-gray-700 mb-1.5">{{form.combined ? '工單計價數量' : '工單數量'}}</label>
           <input
             v-model.number="form.quantity"
             type="number"
@@ -302,7 +368,7 @@ onMounted(async () => {
         <!-- 印刷規格區塊 -->
         </fieldset>
         <fieldset class="border border-gray-200 rounded-xl p-4 space-y-3 bg-gray-50">
-          <legend class="text-sm font-medium text-gray-700">印刷規格</legend>
+          <legend class="text-sm font-medium text-gray-700">入紙與版材</legend>
 
           <div class="grid grid-cols-2 gap-3">
             <div>
@@ -329,9 +395,57 @@ onMounted(async () => {
                 v-model="form.cut_type"
                 type="text"
                 class="w-full touch-target border border-gray-300 rounded-lg px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                placeholder="例如：菊全開, 四開, 八開"
+                placeholder="例如：菊全開、2K"
+                aria-describedby="ream-guide"
               />
+              <p id="ream-guide" aria-live="polite" class="mt-1 text-sm text-gray-600">
+                {{ sheetsPerReam ? '用紙換算：每令 ' + sheetsPerReam.toLocaleString('zh-TW') + ' 張' : '用紙參考：菊全開每令 500 張，2K 每令 1,000 張。' }}
+              </p>
             </div>
+            <template v-for="(label,key) in customerFields" :key="key">
+              <div v-if="key === 'paper_size'" class="col-span-2 space-y-2">
+                <label>入紙尺寸<select class="block w-full touch-target border rounded p-2 bg-white" :value="customSize ? '__custom' : form.paper_size" @change="pickSize($event.target.value)">
+                  <option value="">未指定</option><option v-for="s in sizes" :key="s" :value="s">{{s}}</option>
+                  <option v-if="form.paper_size && !sizes.includes(form.paper_size)" :value="form.paper_size">{{form.paper_size}}（工單尺寸）</option>
+                  <option value="__custom">自訂尺寸…</option>
+                </select></label>
+                <div v-if="customSize" class="space-y-2">
+                  <div class="grid grid-cols-3 gap-2">
+                    <label>寬<input v-model.trim="width" inputmode="decimal" class="block border w-full p-2"></label>
+                    <label>高<input v-model.trim="height" inputmode="decimal" class="block border w-full p-2"></label>
+                    <label>單位<select v-model="unit" class="block border w-full p-2"><option>英吋</option><option>公分</option></select></label>
+                  </div>
+                  <label><input type="checkbox" v-model="rememberSize"> 加入常用尺寸</label>
+                  <p v-if="errors.paper_size" role="alert" class="text-red-700">{{errors.paper_size}}</p>
+                </div>
+                <button v-if="sizeLoadError" type="button" @click="loadSizes">常用尺寸載入失敗，重新載入</button>
+              </div>
+              <fieldset v-else-if="key === 'paper_input'" class="col-span-2">
+                <legend>入紙數量</legend>
+                <div class="grid grid-cols-2 gap-3">
+                  <label>令數<input v-model.trim="reams" @input="paperChanged=true" inputmode="decimal" maxlength="30" placeholder="例：3 或 2.5" class="block border w-full p-2 rounded"></label>
+                  <label>加張（選填）<input v-model.trim="sheets" @input="paperChanged=true" inputmode="numeric" maxlength="30" placeholder="沒有加張可留空" class="block border w-full p-2 rounded"></label>
+                </div>
+                <p v-if="form.paper_input && !paperChanged && !reams && !sheets" class="text-sm">原紀錄：{{ form.paper_input }}（填入新數量才會取代）</p>
+                <p v-if="errors.paper_input" role="alert" class="text-red-700">{{errors.paper_input}}</p>
+              </fieldset>
+              <label v-else-if="key === 'plate_info'">{{label}}
+                <select v-model="form.plate_info" class="block w-full touch-target border rounded bg-white p-2">
+                  <option value="">未指定</option>
+                  <option v-for="plate in plateOptions" :key="plate" :value="plate">{{plate}}</option>
+                  <option v-if="original.plate_info && !plateOptions.includes(original.plate_info)" :value="original.plate_info">{{original.plate_info}}（原紀錄）</option>
+                </select>
+              </label>
+              <label v-else>{{label}}<input v-model="form[key]" maxlength="200" class="block border w-full p-2 rounded"></label>
+            </template>
+          </div></fieldset></details>
+          <CombinedOrder v-if="form.combined" :spec="form.combined" editable />
+          <details class="paper-fold" ref="shopFold"><summary>廠內作業資料</summary>
+          <fieldset class="space-y-4"><div class="grid grid-cols-2 gap-3">
+            <label v-for="(label,key) in shopFields" :key="key">{{label}}
+              <input v-model="form[key]" maxlength="200" class="block border w-full p-2 rounded">
+            </label>
+            <p v-if="editing && !form.combined" class="col-span-2">完成數量（師傅回報）：{{reported ?? '尚未填報'}}</p>
             <div>
               <label class="block text-xs text-gray-500 mb-1">正面</label>
               <input
@@ -435,6 +549,7 @@ onMounted(async () => {
           </p>
         </div>
 
+        </details>
         <!-- Submit Button -->
         <button
           type="submit"

@@ -116,6 +116,7 @@ export function useStatusHelpers() {
 
   const nextStatus = (currentStatus) => {
     const transitions = {
+      '排印': '印製中',
       '印製中': '已完成_待請款',
       '已完成_待請款': '已請款',
     }
