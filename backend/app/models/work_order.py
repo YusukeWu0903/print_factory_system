@@ -52,6 +52,7 @@ class WorkOrder(Base):
     front_side = Column(Integer, nullable=True)          # 正面 (數字，例如 4, 1, 0)
     back_side = Column(Integer, nullable=True)           # 反面 (數字，例如 1, 0)
     operator = Column(Integer, nullable=True)            # 人員數 (人數，數字)
+    ocr_review_notes = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)                  # 備註 (其他特殊要求/後加工)
 
     # 費用結構

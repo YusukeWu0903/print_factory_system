@@ -39,7 +39,7 @@ def ensure_schema(engine) -> None:
 
     columns = {c["name"] for c in inspector.get_columns("work_orders")} if "work_orders" in tables else set()
     needs_employee = "auth_sessions" in tables and "employee" not in {c["name"] for c in inspector.get_columns("auth_sessions")}
-    additions = {"combined": "JSON", "piece_reports": "JSON", "completed_quantity": "INTEGER", "revision": "INTEGER NOT NULL DEFAULT 1", "updated_at": "VARCHAR(40)", "audit_key": "VARCHAR(32)"}
+    additions = {"ocr_review_notes": "TEXT", "combined": "JSON", "piece_reports": "JSON", "completed_quantity": "INTEGER", "revision": "INTEGER NOT NULL DEFAULT 1", "updated_at": "VARCHAR(40)", "audit_key": "VARCHAR(32)"}
     additions.update(dict.fromkeys(('plate_number', 'book_count', 'paper_size', 'paper_input', 'plate_info', 'press_size', 'press_actual', 'press_waste', 'press_runs', 'press_ink', 'finisher', 'due_date'), "VARCHAR(200)"))
     missing = set(additions) - columns if columns else set()
     if ((bool(tables) and "paper_size_presets" not in tables) or needs_employee or missing or (bool(tables) and "statements" not in tables) or needs_order_number or needs_session_table or needs_session_credential) and engine.url.get_backend_name() == "sqlite":

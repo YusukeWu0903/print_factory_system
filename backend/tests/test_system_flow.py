@@ -463,3 +463,17 @@ def test_export_ledger_preserves_work_order_and_piece_values(client):
     assert list(book["學教用紙"].values)[1][2] == "1600+150"
     assert book["分項回報"].max_row == 4
     assert list(book["印刷明細"].values)[1][4] == "0.25"
+
+def test_review_notes_persist_separately(client):
+    headers = login(client)
+    cid = create_client(client, headers)
+    body = {"client_id":cid,"date":"2026-11-27","item_name":"備註測試",
+            "notes":"送印前確認","ocr_review_notes":"內部分機 12\n樣張送倉庫"}
+    result = client.post("/api/work-orders/",headers=headers,json=body)
+    assert result.status_code == 201
+    order = result.json()
+    assert client.get("/api/work-orders/").json()[0]["ocr_review_notes"] == body["ocr_review_notes"]
+    url = "/api/work-orders/"+str(order["id"])
+    assert client.patch(url,headers=headers,json={"expected_revision":order["revision"],"ocr_review_notes":"樣張送倉庫"}).status_code == 200
+    stored = client.get(url).json()
+    assert stored["notes"] == body["notes"] and stored["ocr_review_notes"] == "樣張送倉庫"

@@ -42,6 +42,7 @@ class CombinedOrder(BaseModel):
 
 
 class PaperSections(BaseModel):
+    ocr_review_notes: str | None = None
     plate_number: ShortText | None = None
     book_count: ShortText | None = None
     combined: CombinedOrder | None = None

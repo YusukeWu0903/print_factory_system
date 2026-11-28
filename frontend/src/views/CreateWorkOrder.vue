@@ -8,8 +8,8 @@ const paperDefaults = () => Object.fromEntries(Object.keys({...customerFields,..
 import { splitPaperInput, formatPaperInput } from '@/services/paperInput'
 import CombinedOrder from '@/components/CombinedOrder.vue'
 import { emptyCombined } from '@/services/combined'
+import { photoLabels } from '@/services/photoFields'
 import PhotoImport from '@/components/PhotoImport.vue'
-import { authState } from '@/services/auth'
 import AppLayout from '@/components/AppLayout.vue'
 import { useWorkOrders, useClients } from '@/composables/useApi'
 
@@ -28,6 +28,7 @@ const todayLocal = () => {
 
 const form = ref({
   ...paperDefaults(),
+    ocr_review_notes: '',
     combined: null,
     date: todayLocal(),
   client_id: '',
@@ -53,6 +54,53 @@ const form = ref({
 const editId = route.query.edit
 const editing = editId !== undefined
 const initialStatus = ref('印製中')
+const scanning = ref(false)
+const photoReset = ref(0)
+const photoFeedback = ref('')
+const dateTouched = ref(false)
+function applyPhoto(fields, texts = [], mappedLines = {}) {
+  const used = new Set()
+  const filled = []
+  for (const [key,label] of Object.entries(photoLabels)) {
+    if (key === 'client_name') continue
+    const defaultDate = key === 'date' && !editing && !dateTouched.value && form.value.date === todayLocal()
+    if (key === 'paper_input' && (paperChanged.value || reams.value || sheets.value)) continue
+    if (key === 'paper_size' && customSize.value) continue
+    if (fields[key] != null && fields[key] !== '' && (form.value[key] == null || form.value[key] === '' || defaultDate)) {
+      form.value[key] = fields[key]
+      if (key === 'paper_input') [reams.value, sheets.value] = splitPaperInput(fields[key])
+      if (key === 'date') dateTouched.value = true
+      filled.push(label)
+      used.add(key)
+    }
+  }
+  const client = clients.value.find(c => c.name.trim() === fields.client_name)
+  if (client && !form.value.client_id) {
+    form.value.client_id = client.id
+    filled.push('客戶名稱')
+    used.add('client_name')
+  }
+  if (fields.combined && (!editing || form.value.combined)) {
+    form.value.combined ??= emptyCombined()
+    for (const [group,label] of [['student_paper','學用'],['teacher_paper','教用']]) {
+      for (const [key,title] of [['quantity','來單數量'],['paper','用紙']]) {
+        if (fields.combined[group]?.[key] && !form.value.combined[group][key]) {
+          form.value.combined[group][key] = fields.combined[group][key]
+          filled.push(label + title)
+        }
+      }
+    }
+  }
+  const pending = texts.filter((text,index) => text.trim() && !used.has(mappedLines[index]))
+  const block = pending.join('\n')
+  const existing = form.value.ocr_review_notes || ''
+  if (block && !('\n'+existing+'\n').includes('\n'+block+'\n')) {
+    form.value.ocr_review_notes = existing ? existing+'\n'+block : block
+  }
+  photoFeedback.value = filled.length ? '已填入：'+filled.join('、')+'。請核對後儲存。' : '未填入新值。請核對原文或檢查目標欄位是否已有資料。'
+  if (pending.length) photoFeedback.value += ' 未能確認歸屬的原文已保留在「辨識待整理備註」。'
+  return filled.length > 0
+}
 const ready = ref(!editing)
 const loadError = ref('')
 const original = {}
@@ -135,7 +183,7 @@ const validateNewClient = () => {
 }
 
 const handleSubmit = async () => {
-  if (!ready.value || submitting.value) return
+  if (!ready.value || submitting.value || scanning.value) return
   if (!validateForm()) {
     customerFold.value.open = true
     shopFold.value.open = true
@@ -161,6 +209,7 @@ const handleSubmit = async () => {
       back_side: form.value.back_side,
       operator: form.value.operator,
       notes: form.value.notes || null,
+      ocr_review_notes: form.value.ocr_review_notes || null,
       paper_fee: form.value.paper_fee,
       plate_fee: form.value.plate_fee,
       wage: form.value.wage,
@@ -223,11 +272,14 @@ const handleCreateClient = async () => {
 }
 
 const resetForm = () => {
+  photoReset.value++
+  dateTouched.value=false; photoFeedback.value=''
   initialStatus.value='印製中'
   customSize.value=false; width.value=''; height.value=''; unit.value='英吋'; rememberSize.value=false
   reams.value = ''; sheets.value = ''; paperChanged.value = false
   form.value = {
     ...paperDefaults(),
+    ocr_review_notes: '',
     combined: null,
     date: todayLocal(),
     client_id: '',
@@ -282,11 +334,14 @@ onMounted(async () => {
             <option value="standard">一般工單</option><option value="combined">學用／教用合併工單</option>
           </select>
         </label>
-        <details open class="paper-fold" ref="customerFold"><summary>客戶來單資料</summary><fieldset class="space-y-4"><PhotoImport v-if="authState.publicSandbox" @apply="Object.assign(form, $event)" />
+        <details open class="paper-fold" ref="customerFold"><summary>客戶來單資料</summary><fieldset class="space-y-4"><PhotoImport :key="photoReset" :feedback="photoFeedback" :apply-choice="applyPhoto" @busy="scanning=$event" @apply="applyPhoto" />
+          <label class="block">辨識待整理備註
+            <textarea class="block w-full border rounded p-2" rows="4" v-model="form.ocr_review_notes" placeholder="尚待核對的照片文字，可自行整理"></textarea>
+          </label>
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1.5">訂單日期</label>
           <input
-            v-model="form.date"
+            v-model="form.date" @input="dateTouched=true"
             type="date"
             class="w-full touch-target border border-gray-300 rounded-lg px-4 py-3 text-base focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             :class="{ 'border-red-500': errors.date }"
@@ -553,7 +608,7 @@ onMounted(async () => {
         <!-- Submit Button -->
         <button
           type="submit"
-          :disabled="submitting"
+          :disabled="submitting || scanning"
           class="w-full touch-target bg-blue-700 text-white font-semibold rounded-xl py-3.5 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
         >
           <svg v-if="submitting" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -567,7 +622,7 @@ onMounted(async () => {
         <button
           type="button"
           @click="editing ? router.push(listLocation) : resetForm()"
-          :disabled="submitting"
+          :disabled="submitting || scanning"
           class="w-full touch-target bg-white border border-gray-300 text-gray-700 font-medium rounded-xl py-3.5 active:bg-gray-50 transition-colors disabled:opacity-50"
         >
           {{ editing ? '取消編輯' : '重置表單' }}

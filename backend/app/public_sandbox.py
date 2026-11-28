@@ -1,5 +1,5 @@
 """Public trial entry point. Serve the built UI and business routes against a dedicated SQLite file."""
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import create_engine
@@ -29,7 +29,7 @@ def trial_db(request: Request):
         yield db
 
 from app.api.photo_ocr import router as photo_router
-app.include_router(photo_router, prefix="/api/photos")
+app.include_router(photo_router, prefix="/api/photos", dependencies=[Depends(get_db)])
 app.dependency_overrides[get_db] = trial_db
 for prefix, router in [("clients", clients.router), ("work-orders", work_orders.router), ("reconciliation", reconciliation.router)]:
     app.include_router(router, prefix=f"/api/{prefix}")

@@ -38,6 +38,9 @@ async def disable_api_caching(request: Request, call_next):
     return response
 
 # Include routers
+from app.api.photo_ocr import router as photo_router
+from app.core.database import get_db
+app.include_router(photo_router, prefix="/api/photos", dependencies=[Depends(require_admin), Depends(get_db)])
 from app.api.staff import router as staff_router
 app.include_router(staff_router, prefix="/api/staff")
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])

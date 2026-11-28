@@ -18,8 +18,8 @@ out = root.parent / "factory-releases"
 out.mkdir(exist_ok=True)
 target = out / f"print-ledger-{version[:12]}.zip"
 with zipfile.ZipFile(target.with_suffix(".tmp"), "w", zipfile.ZIP_DEFLATED) as z:
-    for name in git("ls-files", "backend/app", "backend/requirements.txt", "operations").splitlines():
-        if name.endswith((".py", ".ps1", ".md", "requirements.txt")) and name != "backend/app/public_sandbox.py":
+    for name in git("ls-files", "backend/app", "backend/requirements.txt", "backend/requirements-ocr.txt", "operations").splitlines():
+        if name.endswith((".py", ".ps1", ".md", "requirements.txt", "requirements-ocr.txt")) and name != "backend/app/public_sandbox.py":
             z.write(root / name, name)
     for path in (root / "frontend/dist").rglob("*"):
         if path.is_file() and path.name != "sandbox.html":

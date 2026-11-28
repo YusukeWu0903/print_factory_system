@@ -154,6 +154,7 @@ onMounted(() => {
             <CombinedOrder v-if="wo.combined" :spec="wo.combined" :reports="wo.piece_reports" />
             <details class="paper-fold"><summary>客戶來單資料</summary>
               <p>入紙：{{[wo.paper_weight,wo.paper_type,wo.cut_type].filter(Boolean).join(' · ') || '未填'}}</p>
+              <div v-if="wo.ocr_review_notes"><b>辨識待整理備註</b><p class="whitespace-pre-wrap">{{wo.ocr_review_notes}}</p></div>
               <p v-for="(label,key) in customerFields" :key="key">{{label}}：{{wo[key] || '未填'}}</p>
             </details>
             <details class="paper-fold"><summary>廠內作業資料</summary>

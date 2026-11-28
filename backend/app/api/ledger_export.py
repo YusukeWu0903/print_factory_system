@@ -20,7 +20,7 @@ COLUMNS = {
     "press_runs":"台數", "press_ink":"印刷顏色", "front_side":"正面色數",
     "back_side":"反面色數", "operator":"領機", "finisher":"後加工廠", "due_date":"交期",
     "paper_fee":"紙費", "plate_fee":"版費", "wage":"印工", "total_amount":"總金額",
-    "notes":"備註", "revision":"修訂次數", "updated_at":"最後更新時間",
+    "notes":"備註", "ocr_review_notes":"辨識待整理備註", "revision":"修訂次數", "updated_at":"最後更新時間",
 }
 
 
